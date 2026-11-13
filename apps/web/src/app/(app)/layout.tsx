@@ -1,13 +1,20 @@
 import { Suspense } from 'react';
 import { Shell } from '@/components/dd/shell';
-import { getSession, resolveRange, resolveScope, ROLE_LABEL } from '@/lib/session';
+import { getSession, NoAccessError, resolveRange, resolveScope, ROLE_LABEL } from '@/lib/session';
+import { NoAccess } from '@/components/dd/no-access';
 import { orgRoot, highestRole } from '@dd/shared';
 
 // Every page reads the signed-in user, so none of this can be prerendered.
 export const dynamic = 'force-dynamic';
 
 async function ShellLoader({ children }: { children: React.ReactNode }) {
-  const s = await getSession();
+  let s: Awaited<ReturnType<typeof getSession>>;
+  try {
+    s = await getSession();
+  } catch (e) {
+    if (e instanceof NoAccessError) return <NoAccess message={e.message} />;
+    throw e;
+  }
   const scope = resolveScope(s, undefined);
   const range = resolveRange(s.world.now);
   const { people, items } = s.world;

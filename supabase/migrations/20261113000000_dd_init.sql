@@ -116,52 +116,20 @@ create table if not exists dd_policy_settings (
   primary key (key, version)
 );
 
--- Row-level security.
---
--- ON for every table, with a policy for the server-side service role. The roles below are the OAP
--- tenant roles: <schema>_service, <schema>_anon and <schema>_authenticated. Each statement is guarded by
--- "does this role exist", so the same file also runs on a plain Postgres.
+-- Row-level security: on, with no policy for anon/authenticated, so the browser keys see nothing.
+-- Only the server-side service key (which the OAP gateway maps to <schema>_service) reads or writes.
+-- The policy below is created only if that role exists, so the same file also runs on a plain Postgres.
 do $$
 declare
   t text;
   svc text := current_schema() || '_service';
-  tables text[] := array['dd_people','dd_report_imports','dd_cleanup_items','dd_item_files','dd_import_issues','dd_audit_events','dd_policy_settings'];
 begin
-  foreach t in array tables loop
+  foreach t in array array['dd_people','dd_report_imports','dd_cleanup_items','dd_item_files','dd_import_issues','dd_audit_events','dd_policy_settings']
+  loop
     execute format('alter table %I enable row level security', t);
     if exists (select 1 from pg_roles where rolname = svc) then
       execute format('drop policy if exists dd_service_all on %I', t);
       execute format('create policy dd_service_all on %I for all to %I using (true) with check (true)', t, svc);
-    end if;
-  end loop;
-end $$;
-
--- TEMPORARY, for the first deployment test: let the anon and authenticated roles read and write dd_* tables,
--- so the app works with only the platform-injected IDDB_API_URL and IDDB_ANON_KEY.
---
--- WARNING: this means anyone who holds this tenant's anon key can read and change these tables directly through
--- the REST API, bypassing the app's own permission checks. This app never sends the key to a browser, but other
--- apps in the same tenant share the anon role. Remove this block (and revoke the grants) before real data goes in;
--- the replacement is the app's own resource role with explicit grants, or user-scoped policies.
---
--- Even here, dd_audit_events stays append-only: the trigger above rejects UPDATE and DELETE for every role.
-do $$
-declare
-  t text;
-  r text;
-  s text := current_schema();
-  tables text[] := array['dd_people','dd_report_imports','dd_cleanup_items','dd_item_files','dd_import_issues','dd_audit_events','dd_policy_settings'];
-begin
-  foreach r in array array[s || '_anon', s || '_authenticated'] loop
-    if exists (select 1 from pg_roles where rolname = r) then
-      execute format('grant usage on schema %I to %I', s, r);
-      execute format('grant usage, select on all sequences in schema %I to %I', s, r);
-      foreach t in array tables loop
-        execute format('grant select, insert, update, delete on %I to %I', t, r);
-        -- one policy per role (the name is suffixed), so a second role never replaces the first
-        execute format('drop policy if exists %I on %I', 'dd_temp_open_' || r, t);
-        execute format('create policy %I on %I for all to %I using (true) with check (true)', 'dd_temp_open_' || r, t, r);
-      end loop;
     end if;
   end loop;
 end $$;
