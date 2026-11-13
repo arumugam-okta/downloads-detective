@@ -1,9 +1,7 @@
-import bolt from '@slack/bolt';
+import { App } from '@slack/bolt';
 import type { Lifecycle } from './lifecycle.ts';
 import { ACTION, ATTEST_MODAL, attestModal } from './blocks.ts';
 import { HttpError } from './errors.ts';
-
-const { App } = bolt;
 
 /**
  * Slack interactivity over Socket Mode (an outbound WebSocket), so no public URL has to pass the OAP app gate.

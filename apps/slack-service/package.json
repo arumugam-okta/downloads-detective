@@ -10,12 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dd/db": "workspace:*",
+    "@dd/core": "workspace:*",
     "@dd/shared": "workspace:*",
-    "@slack/bolt": "^4.1.0",
-    "@slack/types": "^2.14.0",
-    "@slack/web-api": "^7.8.0",
-    "csv-parse": "^5.6.0",
     "fastify": "^5.2.0",
     "zod": "^4.0.0"
   },

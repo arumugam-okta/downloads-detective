@@ -2,7 +2,9 @@ import type { Person } from '@dd/shared';
 
 import { fingerprintOf } from '@dd/db';
 import { HttpError } from './errors.ts';
+import { requireCompliance } from './authz.ts';
 import type { Lifecycle } from './lifecycle.ts';
+import { ConsoleNotifier } from './notifier.ts';
 
 export interface TestResult {
   ok: boolean;
@@ -20,6 +22,7 @@ export interface TestResult {
  * means repeated tests never collide with the "one item per engineer + case" rule.
  */
 export async function sendTest(l: Lifecycle, by: Person, email: string): Promise<TestResult> {
+  requireCompliance(by);
   const { store } = l;
   const now = l.now();
   const stamp = now.toISOString().replace(/[-:T.Z]/g, '').slice(2, 14);
@@ -40,7 +43,7 @@ export async function sendTest(l: Lifecycle, by: Person, email: string): Promise
 
   const result = await l.deliver(item.id);
   const fresh = await l.mustItem(item.id);
-  const live = l.deps.notifier.constructor.name !== 'ConsoleNotifier';
+  const live = !(l.deps.notifier instanceof ConsoleNotifier);
   if (result === 'delivered') {
     return {
       ok: true, itemId: item.id, ref: item.ref, delivered: true, channel: live ? 'slack' : 'dev-outbox',
@@ -53,3 +56,18 @@ export async function sendTest(l: Lifecycle, by: Person, email: string): Promise
   throw new HttpError(502, `Slack delivery failed: ${fresh.error ?? 'unknown error'}`);
 }
 
+
+export interface SlackStatus {
+  mode: 'live' | 'dev';
+  botToken: boolean;
+  /** True when Socket Mode is configured, so the buttons in Slack work. */
+  interactive: boolean;
+  webUrl: string;
+}
+
+export function slackStatus(l: Lifecycle, by: Person, cfg: { slack: { botToken?: string | undefined; appToken?: string | undefined }; webUrl: string }): SlackStatus {
+  requireCompliance(by);
+  return {
+    mode: l.deps.notifier instanceof ConsoleNotifier ? 'dev' : 'live', botToken: !!cfg.slack.botToken, interactive: !!cfg.slack.appToken, webUrl: cfg.webUrl,
+  };
+}

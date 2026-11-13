@@ -1,3 +1,4 @@
+/** Settings for the backend runtime. The HTTP-only fields (port, host, internalToken) are used by apps/slack-service. */
 export interface ServiceConfig {
   port: number;
   host: string;

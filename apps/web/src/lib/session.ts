@@ -2,14 +2,23 @@ import 'server-only';
 import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { createStore, type Store } from '@dd/db';
+import { isInProcess } from './backend';
 import {
   buildViewer, highestRole, orgRoot, scopeOptions, subtreeIds, type Item, type ItemFile, type Person, type Role, type ScopeOption, type Viewer,
 } from '@dd/shared';
 import { relevantInRange, toViews, type ItemView, type Range } from './metrics';
 
 const g = globalThis as unknown as { __ddStore?: Store };
-/** One client per server process. */
-export const getStore = async (): Promise<Store> => (g.__ddStore ??= createStore());
+/**
+ * One database client per server process. In the single-app deployment this is the same client the in-process
+ * backend uses, so reads and writes share it; with a separate Slack service the web app reads the database itself.
+ */
+export const getStore = async (): Promise<Store> => {
+  if (g.__ddStore) return g.__ddStore;
+  if (isInProcess()) g.__ddStore = (await import('@dd/core')).getRuntime().store;
+  else g.__ddStore = createStore();
+  return g.__ddStore;
+};
 
 /** OAP forwards the signed-in user's email in this header. */
 const IDENTITY_HEADER = process.env.IDENTITY_HEADER ?? 'x-iddb-user-email';

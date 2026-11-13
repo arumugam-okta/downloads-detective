@@ -1,17 +1,16 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { HttpError, ReportFormatError, runSlaTick, sendTest, slackStatus, type Lifecycle, type ServiceConfig } from '@dd/core';
 import type { Person } from '@dd/shared';
-import { Lifecycle } from './lifecycle.ts';
-import { HttpError } from './errors.ts';
-import { ReportFormatError } from './ingest.ts';
-import { runSlaTick } from './sla.ts';
-import { ConsoleNotifier } from './notifier.ts';
-import { sendTest } from './test-message.ts';
-import type { ServiceConfig } from './config.ts';
+import { ConsoleNotifier } from '@dd/core';
 
 /** The web app sends this header with the signed-in user's email. It is only trusted with the bearer token. */
 const ACTOR_HEADER = 'x-dd-actor';
 
+/**
+ * Thin HTTP layer for the two-service topology: authenticates the caller, resolves the actor, then calls the
+ * Lifecycle, which owns every rule and permission check. The same Lifecycle runs in-process in the mono app.
+ */
 export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<FastifyInstance> {
   const app = Fastify({ logger: true, bodyLimit: 20 * 1024 * 1024 });
   app.addContentTypeParser('text/csv', { parseAs: 'string' }, (_req, body, done) => done(null, body));
@@ -47,11 +46,8 @@ export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<Fas
     return l.processReport(req.body, { filename: req.query.filename ?? `upload_${new Date().toISOString().slice(0, 10)}.csv`, source: req.query.source ?? 'api' });
   });
 
-  // engineer
   app.post('/items/:id/acknowledge', async (req) => l.acknowledge(id(req), await actorOf(req)));
   app.post('/items/:id/attest', async (req) => l.attest(id(req), await actorOf(req), req.body));
-
-  // manager
   app.post('/items/:id/remind', async (req) => l.remind(id(req), await actorOf(req)));
   app.post('/items/:id/escalate', async (req) => l.escalate(id(req), await actorOf(req)));
   app.post('/items/:id/review', async (req) => l.review(id(req), await actorOf(req)));
@@ -59,37 +55,16 @@ export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<Fas
     const { personId } = z.object({ personId: z.number().int().positive() }).parse(req.body);
     return l.reassign(id(req), personId, await actorOf(req));
   });
-
-  // compliance
   app.post('/items/:id/retry', async (req) => ({ result: await l.retryDelivery(id(req), await actorOf(req)) }));
   app.post('/imports/retry-failed', async (req) => l.retryAllFailed(await actorOf(req)));
   app.post('/people/:id/slack-map', async (req) => {
     const { slackUserId } = z.object({ slackUserId: z.string().regex(/^[UW][A-Z0-9]{2,}$/, 'Not a Slack member ID').optional() }).parse(req.body ?? {});
     return l.mapSlackUser(id(req), await actorOf(req), slackUserId);
   });
-  app.put('/policy', async (req) => {
-    const actor = await actorOf(req);
-    if (!actor.isCompliance) throw new HttpError(403, 'Compliance access required');
-    const body = z.object({
-      slaDays: z.number().int().min(1).max(30),
-      reminderHours: z.array(z.number().int().min(1)).min(0).max(5),
-      directorAfterBreachHours: z.number().int().min(1).max(168),
-    }).parse(req.body);
-    await l.store.setPolicy(body, actor.id);
-    await l.audit({ actorId: actor.id, actorLabel: actor.name, action: 'policy_changed', detail: `SLA ${body.slaDays} days; reminders at ${body.reminderHours.join('h, ')}h` });
-    return body;
-  });
-
-  // Slack status and a one-click test, both for compliance. Reports what this process actually runs with.
-  app.get('/slack/status', async (req) => {
-    const actor = await actorOf(req);
-    if (!actor.isCompliance) throw new HttpError(403, 'Compliance access required');
-    const live = !(l.deps.notifier instanceof ConsoleNotifier);
-    return { mode: live ? 'live' : 'dev', botToken: !!cfg.slack.botToken, interactive: !!cfg.slack.appToken, webUrl: cfg.webUrl };
-  });
+  app.put('/policy', async (req) => l.updatePolicy(await actorOf(req), req.body));
+  app.get('/slack/status', async (req) => slackStatus(l, await actorOf(req), cfg));
   app.post('/slack/test', async (req) => {
     const actor = await actorOf(req);
-    if (!actor.isCompliance) throw new HttpError(403, 'Compliance access required');
     const { email } = z.object({ email: z.string().trim().toLowerCase().email().optional() }).parse(req.body ?? {});
     return sendTest(l, actor, email ?? actor.email);
   });

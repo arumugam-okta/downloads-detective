@@ -1,6 +1,6 @@
 import {
   ATTESTATION_LABEL, SYSTEM_ACTOR, attestationInput, dueAtFor, escalationTargets,
-  type AttestationInput, type Item, type Person,
+  type AttestationInput, type Item, type Person, type Policy,
 } from '@dd/shared';
 import { fingerprintOf, type NewAudit, type Store } from '@dd/db';
 import {
@@ -11,7 +11,7 @@ import { requireCompliance, requireEngineer, requireManagerOf } from './authz.ts
 import { HttpError } from './errors.ts';
 import { nameFromEmail, parseReport } from './ingest.ts';
 import type { Notifier } from './notifier.ts';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 
 export interface LifecycleDeps {
   store: Store;
@@ -351,4 +351,23 @@ export class Lifecycle {
     await this.audit({ ...person(by), action: 'delivery_retried', detail: `Retried ${failed.length} failed deliveries` });
     return { retried: failed.length, delivered };
   }
+
+  // ------------------------------------------------------------- settings
+
+  /** Versioned: a change adds a row, so due dates already assigned are never recomputed. */
+  async updatePolicy(by: Person, raw: unknown): Promise<Policy> {
+    requireCompliance(by);
+    const parsed = policyInput.safeParse(raw);
+    if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join('; '));
+    const p = parsed.data;
+    await this.store.setPolicy(p, by.id);
+    await this.audit({ actorId: by.id, actorLabel: by.name, action: 'policy_changed', detail: `SLA ${p.slaDays} days; reminders at ${p.reminderHours.join('h, ') || 'none'}${p.reminderHours.length ? 'h' : ''}` });
+    return p;
+  }
 }
+
+const policyInput = z.object({
+  slaDays: z.number().int().min(1).max(30),
+  reminderHours: z.array(z.number().int().min(1)).max(5),
+  directorAfterBreachHours: z.number().int().min(1).max(168),
+});
