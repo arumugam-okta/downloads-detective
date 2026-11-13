@@ -2,7 +2,6 @@ import { Suspense } from 'react';
 import { Shell } from '@/components/dd/shell';
 import { getSession, NoAccessError, resolveRange, resolveScope, ROLE_LABEL } from '@/lib/session';
 import { NoAccess } from '@/components/dd/no-access';
-import { orgRoot, highestRole } from '@dd/shared';
 
 // Every page reads the signed-in user, so none of this can be prerendered.
 export const dynamic = 'force-dynamic';
@@ -30,13 +29,6 @@ async function ShellLoader({ children }: { children: React.ReactNode }) {
     }))),
   ];
 
-  const dev = process.env.NODE_ENV !== 'production' && process.env.DEV_AUTH !== 'off';
-  const root = orgRoot(people);
-  const devUsers = dev
-    ? people.filter((p) => p.active && (p.isCompliance || p.id === root?.id || ['Elena Brooks', 'Maya Patel', 'Daniel Ruiz', 'Marcus Reed', 'Ben Foster'].includes(p.name)))
-        .map((p) => ({ email: p.email, name: p.name, role: ROLE_LABEL[highestRole({ ...s.viewer, roles: p.isCompliance ? ['compliance'] : people.some((x) => x.managerId === p.id) ? ['manager'] : ['engineer'] })] }))
-    : null;
-
   return (
     <Shell
       role={s.role}
@@ -48,7 +40,6 @@ async function ShellLoader({ children }: { children: React.ReactNode }) {
       }}
       range={{ from: range.fromStr, to: range.toStr, label: range.label }}
       workspaceLabel={`${ROLE_LABEL[s.role]} workspace`}
-      devUsers={devUsers}
       searchIndex={searchIndex}
     >
       {children}

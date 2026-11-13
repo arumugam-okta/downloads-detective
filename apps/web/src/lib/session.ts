@@ -22,7 +22,6 @@ export const getStore = async (): Promise<Store> => {
 
 /** OAP forwards the signed-in user's email in this header. */
 const IDENTITY_HEADER = process.env.IDENTITY_HEADER ?? 'x-iddb-user-email';
-const devAuth = () => process.env.DEV_AUTH !== 'off' && process.env.NODE_ENV !== 'production';
 
 export const ROLE_HOME: Record<Role, string> = { engineer: '/cleanup', manager: '/team', compliance: '/overview' };
 export const ROLE_LABEL: Record<Role, string> = { engineer: 'Engineer', manager: 'Manager', compliance: 'Compliance' };
@@ -33,10 +32,6 @@ export interface World {
   items: Item[];
   files: ItemFile[];
 }
-
-/** Comma-separated emails that become compliance users on first sign-in (the trusted gateway header proves the email). */
-const bootstrapAdmins = (): Set<string> =>
-  new Set((process.env.BOOTSTRAP_COMPLIANCE_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean));
 
 const nameFromEmail = (email: string): string =>
   (email.split('@')[0] ?? email).split(/[._-]+/).filter(Boolean).map((p) => p[0]!.toUpperCase() + p.slice(1)).join(' ');
@@ -60,19 +55,27 @@ export class NoAccessError extends Error {}
 export const getSession = cache(async (): Promise<Session> => {
   const h = await headers();
   const c = await cookies();
-  const email = (h.get(IDENTITY_HEADER) ?? (devAuth() ? c.get('dd_user')?.value ?? process.env.DEV_DEFAULT_USER ?? [...bootstrapAdmins()][0] ?? null : null))?.toLowerCase();
+  // The OAP gateway authenticates every request before it reaches the app and passes the user's email in this header.
+  const email = h.get(IDENTITY_HEADER)?.trim().toLowerCase();
   if (!email) throw new NoAccessError('Not signed in');
+
+  // Access is decided by the platform gate: anyone it lets in has full (compliance) access. Their person record is
+  // created on first visit, or upgraded if they already exist from a report, so every permission check downstream
+  // (here and in the Slack backend) agrees.
   let world = await loadWorld();
-  let person = world.people.find((p) => p.email === email && p.active);
-  if (!person && bootstrapAdmins().has(email)) {
-    // First sign-in for a listed admin: create their compliance record so the directory can be set up.
+  let person = world.people.find((p) => p.email === email);
+  if (!person || !person.isCompliance) {
     const store = await getStore();
-    const created = await store.upsertPersonByEmail({ email, name: nameFromEmail(email), isCompliance: true });
-    if (!created.isCompliance) await store.updatePerson(created.id, { isCompliance: true });
-    world = { ...world, people: await store.listPeople() };
-    person = world.people.find((p) => p.email === email);
+    person = person
+      ? await store.updatePerson(person.id, { isCompliance: true })
+      : await store.upsertPersonByEmail({ email, name: nameFromEmail(email), isCompliance: true });
+    if (!person.isCompliance) person = await store.updatePerson(person.id, { isCompliance: true }); // lost a create race to a non-compliance row
+    // Use the record we just wrote rather than re-reading: Next.js memoizes identical reads within a request,
+    // so a second listPeople() here would return the stale list from before the write.
+    world = { ...world, people: [...world.people.filter((p) => p.id !== person!.id), person] };
   }
-  if (!person) throw new NoAccessError(`${email} is not in the Downloads Detective directory yet`);
+  if (!person.active) throw new NoAccessError(`${email} has been deactivated in Downloads Detective`);
+
   const viewer = buildViewer(world.people, person);
   const want = c.get('dd_role')?.value as Role | undefined;
   const role = want && viewer.roles.includes(want) ? want : highestRole(viewer);

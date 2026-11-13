@@ -11,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
-import { switchRole, switchUser } from '@/lib/actions';
+import { switchRole } from '@/lib/actions';
 import type { Role } from '@dd/shared';
 import { cn } from '@/lib/utils';
 
@@ -22,7 +22,6 @@ export interface ShellProps {
   scope: { value: string; label: string; options: Array<{ value: string; label: string; depth: number }>; trail: Array<{ label: string }>; show: boolean };
   range: { from: string; to: string; label: string };
   workspaceLabel: string;
-  devUsers: Array<{ email: string; name: string; role: string }> | null;
   searchIndex: Array<{ kind: 'case' | 'person'; label: string; hint: string; href: string }>;
   children: React.ReactNode;
 }
@@ -168,17 +167,6 @@ function UserMenu({ p }: { p: ShellProps }) {
             <span className="flex-1">{ROLE_TITLE[r]} · {ROLE_PAGE[r]}</span>{r === p.role && <Check className="size-4" />}
           </DropdownMenuItem>
         ))}
-        {p.devUsers && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Sign in as (dev only)</DropdownMenuLabel>
-            {p.devUsers.map((u) => (
-              <DropdownMenuItem key={u.email} onSelect={() => start(() => switchUser(u.email))}>
-                <span className="flex-1">{u.name}</span><span className="text-xs text-muted-foreground">{u.role}</span>
-              </DropdownMenuItem>
-            ))}
-          </>
-        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

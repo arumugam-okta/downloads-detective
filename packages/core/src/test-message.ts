@@ -28,6 +28,9 @@ export async function sendTest(l: Lifecycle, by: Person, email: string): Promise
   const stamp = now.toISOString().replace(/[-:T.Z]/g, '').slice(2, 14);
   const caseNumber = `TEST-${stamp}`;
   const engineer = await store.upsertPersonByEmail({ email, name: email.split('@')[0]!.replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) });
+  // Drop any cached Slack user id first. Ids belong to one workspace, so one saved from a different workspace would
+  // send the test to the wrong person or fail; looking the user up again by email always matches the connected workspace.
+  if (engineer.slackUserId) await store.updatePerson(engineer.id, { slackUserId: null });
   const policy = await store.getPolicy();
 
   const item = await store.createItem({

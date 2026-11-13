@@ -53,15 +53,6 @@ export async function uploadReport(formData: FormData): Promise<ActionResult> {
   return getBackend().uploadReport(await actor(), await file.text(), file.name);
 }
 
-/** Dev only: preview the app as someone else. Production identity comes from the gateway header. */
-export async function switchUser(email: string): Promise<void> {
-  if (process.env.NODE_ENV === 'production' || process.env.DEV_AUTH === 'off') return;
-  const c = await cookies();
-  c.set('dd_user', email, { path: '/' });
-  c.delete('dd_role');
-  redirect('/');
-}
-
 export async function switchRole(role: Role): Promise<void> {
   const { viewer } = await getSession();
   if (!viewer.roles.includes(role)) return;
