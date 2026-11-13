@@ -1,0 +1,4 @@
+case_number,downloaded_by,downloaded_on,filename
+00123456,alice@example.com,2026-11-10T14:03:00Z,customer_logs.zip
+00123456,alice@example.com,2026-11-10T14:05:00Z,screenshot_1.png
+00123457,bob@example.com,2026-11-11T09:30:00Z,heap_dump.hprof

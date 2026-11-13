@@ -1,0 +1,165 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-st-open: var(--st-open);
+  --color-st-open-bg: var(--st-open-bg);
+  --color-st-ack: var(--st-ack);
+  --color-st-ack-bg: var(--st-ack-bg);
+  --color-st-closed: var(--st-closed);
+  --color-st-closed-bg: var(--st-closed-bg);
+  --color-st-overdue: var(--st-overdue);
+  --color-st-overdue-bg: var(--st-overdue-bg);
+  --color-st-triage: var(--st-triage);
+  --color-st-triage-bg: var(--st-triage-bg);
+  --color-st-failed: var(--st-failed);
+  --color-st-failed-bg: var(--st-failed-bg);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* Downloads Detective tokens (Figma: "Design foundations") */
+  --background: #f8f8f6;
+  --foreground: #202523;
+  --card: #ffffff;
+  --card-foreground: #202523;
+  --popover: #ffffff;
+  --popover-foreground: #202523;
+  --primary: #245edb;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1ee;
+  --secondary-foreground: #202523;
+  --muted: #f1f1ee;
+  --muted-foreground: #626762;
+  --accent: #edf3ff;
+  --accent-foreground: #2058b6;
+  --destructive: #b32e37;
+  --border: #e3e5df;
+  --input: #e3e5df;
+  --ring: #245edb;
+  --radius: 0.5rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #202523;
+  --sidebar-primary: #245edb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #edf3ff;
+  --sidebar-accent-foreground: #2058b6;
+  --sidebar-border: #e3e5df;
+  --sidebar-ring: #245edb;
+
+  /* status colors: reserved, always paired with an icon + label */
+  --st-open: #626762;       --st-open-bg: #f1f1ee;
+  --st-ack: #2058b6;        --st-ack-bg: #edf3ff;
+  --st-closed: #23734b;     --st-closed-bg: #edf7f0;
+  --st-overdue: #b32e37;    --st-overdue-bg: #fdeeee;
+  --st-triage: #886010;     --st-triage-bg: #fbf5e5;
+  --st-failed: #b32e37;     --st-failed-bg: #ffffff;
+
+  /* charts */
+  --chart-1: #245edb;  /* single-series blue */
+  --chart-2: #23734b;  /* closed */
+  --chart-3: #626762;  /* open / neutral */
+  --chart-4: #b32e37;  /* overdue */
+  --chart-5: #886010;
+  --heat-0: #eef3fd; --heat-1: #b9cdf6; --heat-2: #86a9ee; --heat-3: #5b88e4; --heat-4: #245edb;
+  --heat-ink-light: #101c35;
+}
+
+.dark {
+  --background: #101211;
+  --foreground: #eceeea;
+  --card: #181b19;
+  --card-foreground: #eceeea;
+  --popover: #181b19;
+  --popover-foreground: #eceeea;
+  --primary: #5b8def;
+  --primary-foreground: #0b1226;
+  --secondary: #222623;
+  --secondary-foreground: #eceeea;
+  --muted: #222623;
+  --muted-foreground: #a3a8a2;
+  --accent: #1c2740;
+  --accent-foreground: #9db9f5;
+  --destructive: #f0777f;
+  --border: #2a2e2b;
+  --input: #2a2e2b;
+  --ring: #5b8def;
+  --sidebar: #141715;
+  --sidebar-foreground: #eceeea;
+  --sidebar-primary: #5b8def;
+  --sidebar-primary-foreground: #0b1226;
+  --sidebar-accent: #1c2740;
+  --sidebar-accent-foreground: #9db9f5;
+  --sidebar-border: #2a2e2b;
+  --sidebar-ring: #5b8def;
+
+  --st-open: #a3a8a2;       --st-open-bg: #222623;
+  --st-ack: #9db9f5;        --st-ack-bg: #1c2740;
+  --st-closed: #5fc58d;     --st-closed-bg: #14281d;
+  --st-overdue: #f0777f;    --st-overdue-bg: #331a1c;
+  --st-triage: #e3b95c;     --st-triage-bg: #2c2412;
+  --st-failed: #f0777f;     --st-failed-bg: #181b19;
+
+  --chart-1: #5b8def;
+  --chart-2: #5fc58d;
+  --chart-3: #8a908a;
+  --chart-4: #f0777f;
+  --chart-5: #e3b95c;
+  --heat-0: #1a2234; --heat-1: #25365a; --heat-2: #33508b; --heat-3: #4672c8; --heat-4: #6f9aef;
+  --heat-ink-light: #eef3fd;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

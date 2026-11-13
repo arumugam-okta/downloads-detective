@@ -1,0 +1,22 @@
+{
+  "name": "downloads-detective",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "pnpm -r --if-present test",
+    "dev:service": "pnpm --filter @dd/slack-service dev",
+    "dev:web": "pnpm --filter @dd/web dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

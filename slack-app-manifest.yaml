@@ -1,0 +1,27 @@
+# Paste into https://api.slack.com/apps -> Create New App -> From a manifest.
+# The bot only sends direct messages. It is never added to a channel.
+display_information:
+  name: Downloads Detective
+  description: Cleanup reminders for files downloaded from closed Salesforce cases.
+  background_color: "#245edb"
+features:
+  bot_user:
+    display_name: Downloads Detective
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    # The bot does not read replies, so don't invite people to type to it.
+    messages_tab_read_only_enabled: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write          # send and update DMs, ephemeral errors
+      - users:read          # look up a user (users.info)
+      - users:read.email    # match a report email to a Slack user
+settings:
+  interactivity:
+    is_enabled: true        # buttons + the confirmation modal; Socket Mode, so no request URL
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

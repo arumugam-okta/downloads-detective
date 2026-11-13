@@ -1,0 +1,2 @@
+# Minimal Supabase project file so the repo has the layout `supabase init` creates.
+project_id = "downloads-detective"
