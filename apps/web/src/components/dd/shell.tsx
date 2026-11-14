@@ -3,13 +3,13 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import { Bell, CalendarDays, Check, ChevronsUpDown, FileText, History, LayoutDashboard, ListChecks, Moon, ScrollText, Search, Settings, ShieldCheck, Sun, Upload, Users } from 'lucide-react';
+import { Bell, CalendarDays, Check, ChevronsUpDown, FileText, History, LayoutDashboard, ListChecks, Moon, ScrollText, Search, Settings, ShieldCheck, Sun, Upload, UserCog, Users } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { Calendar } from '@/components/ui/calendar';
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from '@/components/ui/sidebar';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { switchRole } from '@/lib/actions';
 import type { Role } from '@dd/shared';
@@ -21,6 +21,7 @@ export interface ShellProps {
   user: { name: string; email: string };
   scope: { value: string; label: string; options: Array<{ value: string; label: string; depth: number }>; trail: Array<{ label: string }>; show: boolean };
   range: { from: string; to: string; label: string };
+  workspaceName: string;
   workspaceLabel: string;
   searchIndex: Array<{ kind: 'case' | 'person'; label: string; hint: string; href: string }>;
   children: React.ReactNode;
@@ -31,7 +32,7 @@ const NAV: Record<Role, Array<{ href: string; label: string; icon: typeof Users 
   manager: [{ href: '/team', label: 'My team', icon: Users }, { href: '/items', label: 'Items', icon: ListChecks }, { href: '/reports', label: 'Reports', icon: LayoutDashboard }],
   compliance: [
     { href: '/overview', label: 'Overview', icon: LayoutDashboard }, { href: '/teams', label: 'Teams', icon: Users }, { href: '/items', label: 'Items', icon: ListChecks },
-    { href: '/ingestion', label: 'Ingestion', icon: Upload }, { href: '/audit', label: 'Audit log', icon: ScrollText }, { href: '/settings', label: 'Settings', icon: Settings },
+    { href: '/ingestion', label: 'Ingestion', icon: Upload }, { href: '/users', label: 'Users', icon: UserCog }, { href: '/audit', label: 'Audit log', icon: ScrollText }, { href: '/settings', label: 'Settings', icon: Settings },
   ],
 };
 const ROLE_TITLE: Record<Role, string> = { engineer: 'Engineer', manager: 'Manager', compliance: 'Compliance' };
@@ -179,10 +180,10 @@ export function Shell(p: ShellProps) {
   const crumbs = p.role === 'engineer' ? ['Personal workspace'] : p.scope.trail.map((t) => t.label);
   return (
     <SidebarProvider>
-      <Sidebar>
-        <SidebarHeader className="gap-4 p-4">
-          <Link href="/" className="flex items-center gap-2.5 font-semibold leading-tight"><ShieldCheck className="size-7 text-primary" /><span>Downloads<br />Detective</span></Link>
-          <div className="rounded-lg border px-3 py-2"><div className="text-sm font-medium">Acme engineering</div><div className="text-xs text-muted-foreground">{p.workspaceLabel}</div></div>
+      <Sidebar collapsible="icon">
+        <SidebarHeader className="gap-4 p-4 group-data-[collapsible=icon]:p-2">
+          <Link href="/" className="flex items-center gap-2.5 font-semibold leading-tight group-data-[collapsible=icon]:justify-center" aria-label="Downloads Detective home"><ShieldCheck className="size-7 shrink-0 text-primary" /><span className="group-data-[collapsible=icon]:hidden">Downloads<br />Detective</span></Link>
+          <div className="rounded-lg border px-3 py-2 group-data-[collapsible=icon]:hidden"><div className="text-sm font-medium">{p.workspaceName}</div><div className="text-xs text-muted-foreground">{p.workspaceLabel}</div></div>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
@@ -191,7 +192,7 @@ export function Shell(p: ShellProps) {
               <SidebarMenu>
                 {NAV[p.role].map((n) => (
                   <SidebarMenuItem key={n.href}>
-                    <SidebarMenuButton asChild isActive={path === n.href || path.startsWith(`${n.href}/`)}>
+                    <SidebarMenuButton asChild tooltip={n.label} isActive={path === n.href || path.startsWith(`${n.href}/`)}>
                       <Link href={`${n.href}${n.href === '/cleanup' || n.href === '/history' ? '' : keep}`}><n.icon /><span>{n.label}</span></Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -200,13 +201,15 @@ export function Shell(p: ShellProps) {
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarFooter className="gap-3 p-3">
+        <SidebarFooter className="gap-3 p-3 group-data-[collapsible=icon]:hidden">
           <div className="rounded-lg border p-3 text-sm"><ShieldCheck className="mb-1 size-4 text-muted-foreground" /><div className="font-medium">Keep customer data safe</div><div className="text-xs text-muted-foreground">View cleanup policy ↗</div></div>
           <div className="border-t px-1 pt-3 text-sm"><div className="font-medium">{p.user.name}</div><div className="text-xs text-muted-foreground">{ROLE_TITLE[p.role]} · Switch role</div></div>
         </SidebarFooter>
+        <SidebarRail />
       </Sidebar>
       <SidebarInset className="min-w-0 bg-background">
-        <header className="flex h-16 items-center gap-3 border-b bg-card px-6">
+        <header className="flex h-16 items-center gap-3 border-b bg-card px-4">
+          <SidebarTrigger className="text-muted-foreground" aria-label="Toggle sidebar" title="Toggle sidebar (⌘B)" />
           <nav className="flex-1 truncate text-sm text-muted-foreground" aria-label="Breadcrumb">
             {crumbs.map((c, i) => <span key={i}>{i > 0 && <span className="mx-1.5">/</span>}<span className={cn(i === crumbs.length - 1 && 'text-foreground')}>{c}</span></span>)}
           </nav>

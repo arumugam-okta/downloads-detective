@@ -1,0 +1,9 @@
+case_number,downloaded_by,downloaded_on,filename,case_closed_on,case_subject
+10501001,arumugam@okta.com,2026-11-12T09:15:00Z,customer_export.csv,2026-11-13T04:00:00Z,Bulk export timeout
+10501001,arumugam@okta.com,2026-11-12T09:18:00Z,debug_trace.log,2026-11-13T04:00:00Z,Bulk export timeout
+10501001,arumugam@okta.com,2026-11-12T09:20:00Z,heap_summary.txt,2026-11-13T04:00:00Z,Bulk export timeout
+10501002,arumugam@okta.com,2026-11-11T14:02:00Z,saml_response.xml,2026-11-12T20:30:00Z,SSO login loop
+10501002,arumugam@okta.com,2026-11-11T14:05:00Z,auth_debug.log,2026-11-12T20:30:00Z,SSO login loop
+10501003,noslack.person@example.com,2026-11-12T11:40:00Z,import_errors.csv,2026-11-13T02:00:00Z,Import failed on row 4021
+10501001,arumugam@okta.com,2026-11-12T09:15:00Z,customer_export.csv,2026-11-13T04:00:00Z,Bulk export timeout
+10501004,not-an-email,2026-11-12T10:00:00Z,orphan.log,2026-11-13T03:00:00Z,Bad row on purpose

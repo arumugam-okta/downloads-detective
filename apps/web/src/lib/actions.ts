@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getBackend } from './backend';
 import { getSession, ROLE_HOME } from './session';
-import type { Role } from '@dd/shared';
+import type { PeopleCsvInspection, PeopleImportResult, PeopleMapping, PersonInput, Role } from '@dd/shared';
 
 export interface ActionResult {
   ok: boolean;
@@ -75,4 +75,23 @@ export async function getSlackStatus(): Promise<SlackStatus | null> {
 
 export async function sendTestMessage(email?: string): Promise<ActionResult> {
   return getBackend().sendTest(await actor(), email);
+}
+
+// ---- user management
+
+export async function inspectPeopleFile(formData: FormData): Promise<ActionResult & { data?: PeopleCsvInspection }> {
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: 'Choose a CSV file' };
+  return getBackend().inspectPeople(await actor(), await file.text()) as Promise<ActionResult & { data?: PeopleCsvInspection }>;
+}
+export async function importPeople(formData: FormData, mapping: PeopleMapping, dryRun: boolean): Promise<ActionResult & { data?: PeopleImportResult }> {
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: 'Choose a CSV file' };
+  return getBackend().importPeople(await actor(), await file.text(), mapping, dryRun, file.name) as Promise<ActionResult & { data?: PeopleImportResult }>;
+}
+export async function createPerson(input: PersonInput): Promise<ActionResult> {
+  return getBackend().createPerson(await actor(), input);
+}
+export async function updatePerson(id: number, input: PersonInput): Promise<ActionResult> {
+  return getBackend().updatePerson(await actor(), id, input);
 }

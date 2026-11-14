@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Person } from '@dd/shared';
+import type { PeopleMapping, Person, PersonInput } from '@dd/shared';
 
 export interface BackendResult {
   ok: boolean;
@@ -31,6 +31,10 @@ export interface Backend {
   mapSlackUser(actor: Person, personId: number, slackUserId?: string): Promise<BackendResult>;
   savePolicy(actor: Person, p: PolicyInput): Promise<BackendResult>;
   uploadReport(actor: Person, csv: string, filename: string): Promise<BackendResult>;
+  inspectPeople(actor: Person, csv: string): Promise<BackendResult>;
+  importPeople(actor: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string): Promise<BackendResult>;
+  createPerson(actor: Person, input: PersonInput): Promise<BackendResult>;
+  updatePerson(actor: Person, id: number, input: PersonInput): Promise<BackendResult>;
   slackStatus(actor: Person): Promise<BackendResult>;
   sendTest(actor: Person, email?: string): Promise<BackendResult>;
 }
@@ -71,6 +75,10 @@ class InProcessBackend implements Backend {
     if (!a.isCompliance) return { ok: false, error: 'Compliance access required' };
     return this.run((r) => r.lifecycle.processReport(csv, { filename, source: 'web-upload' }));
   }
+  inspectPeople(a: Person, csv: string) { return this.run(async (r) => r.lifecycle.inspectPeopleCsv(a, csv)); }
+  importPeople(a: Person, csv: string, m: PeopleMapping, dryRun: boolean, filename: string) { return this.run((r) => r.lifecycle.importPeople(a, csv, m, { dryRun, filename })); }
+  createPerson(a: Person, input: PersonInput) { return this.run((r) => r.lifecycle.createPerson(a, input)); }
+  updatePerson(a: Person, id: number, input: PersonInput) { return this.run((r) => r.lifecycle.updatePersonDetails(a, id, input)); }
   async slackStatus(a: Person) {
     return this.run(async (r) => (await import('@dd/core')).slackStatus(r.lifecycle, a, r.cfg));
   }
@@ -117,6 +125,12 @@ class HttpBackend implements Backend {
     if (!a.isCompliance) return Promise.resolve({ ok: false, error: 'Compliance access required' });
     return this.call(a, 'POST', `/reports?filename=${encodeURIComponent(filename)}&source=web-upload`, csv, 'text/csv');
   }
+  inspectPeople(a: Person, csv: string) { return this.call(a, 'POST', '/people/import/inspect', csv, 'text/csv'); }
+  importPeople(a: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string) {
+    return this.call(a, 'POST', '/people/import', { csv, mapping, dryRun, filename });
+  }
+  createPerson(a: Person, input: PersonInput) { return this.call(a, 'POST', '/people', input); }
+  updatePerson(a: Person, id: number, input: PersonInput) { return this.call(a, 'PATCH', `/people/${id}`, input); }
   slackStatus(a: Person) { return this.call(a, 'GET', '/slack/status'); }
   sendTest(a: Person, email?: string) { return this.call(a, 'POST', '/slack/test', email ? { email } : {}); }
 }

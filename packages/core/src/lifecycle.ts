@@ -1,6 +1,6 @@
 import {
   ATTESTATION_LABEL, SYSTEM_ACTOR, attestationInput, dueAtFor, escalationTargets,
-  type AttestationInput, type Item, type Person, type Policy,
+  SLACK_ID_RE, type AttestationInput, type Item, type PeopleCsvInspection, type PeopleImportResult, type PeopleMapping, type Person, type PersonInput, type Policy,
 } from '@dd/shared';
 import { fingerprintOf, type NewAudit, type Store } from '@dd/db';
 import {
@@ -10,6 +10,7 @@ import {
 import { requireCompliance, requireEngineer, requireManagerOf } from './authz.ts';
 import { HttpError } from './errors.ts';
 import { nameFromEmail, parseReport } from './ingest.ts';
+import { inspectPeopleCsv, planPeopleImport, wouldCycle } from './people-import.ts';
 import type { Notifier } from './notifier.ts';
 import { z, ZodError } from 'zod';
 
@@ -355,6 +356,99 @@ export class Lifecycle {
   // ------------------------------------------------------------- settings
 
   /** Versioned: a change adds a row, so due dates already assigned are never recomputed. */
+  // ---- user management (compliance only)
+
+  inspectPeopleCsv(by: Person, csv: string): PeopleCsvInspection {
+    requireCompliance(by);
+    return inspectPeopleCsv(csv);
+  }
+
+  /** Validates a people CSV against the mapping. With dryRun it only reports; otherwise it writes and audits. */
+  async importPeople(by: Person, csv: string, mapping: PeopleMapping, opts: { dryRun: boolean; filename?: string }): Promise<PeopleImportResult> {
+    requireCompliance(by);
+    const plan = planPeopleImport(csv, mapping, await this.store.listPeople(), by);
+    const { planned, links, ...summary } = plan;
+    if (opts.dryRun) return { ...summary, dryRun: true };
+    if (plan.blocking) throw new HttpError(409, plan.blocking);
+
+    const ids = new Map(planned.flatMap((p) => (p.existing ? [[p.email, p.existing.id] as const] : [])));
+    for (const p of planned) {
+      if (!p.existing) ids.set(p.email, (await this.store.upsertPersonByEmail(p.create)).id);
+      else if (Object.keys(p.patch).length) await this.store.updatePerson(p.existing.id, p.patch);
+    }
+    const all = await this.store.listPeople();
+    const idOf = new Map(all.map((x) => [x.email, x.id]));
+    for (const [email, mgr] of links) await this.store.updatePerson(idOf.get(email)!, { managerId: idOf.get(mgr)! });
+    await this.audit({
+      ...person(by), action: 'people_imported',
+      detail: `${opts.filename ?? 'people.csv'}: ${plan.created} added, ${plan.updated} updated, ${plan.managersLinked} manager links`,
+    });
+    return { ...summary, dryRun: false };
+  }
+
+  private async validatePersonInput(by: Person, input: PersonInput, current: Person | null): Promise<Partial<Omit<Person, 'id'>>> {
+    const people = await this.store.listPeople();
+    const patch: Partial<Omit<Person, 'id'>> = {};
+    const text = (v: string | null | undefined) => (v == null || v.trim() === '' ? null : v.trim());
+    if (input.name !== undefined) {
+      if (!input.name.trim()) throw new HttpError(400, 'Name is required');
+      patch.name = input.name.trim();
+    }
+    if (input.email !== undefined) {
+      const email = input.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
+      if (people.some((p) => p.email === email && p.id !== current?.id)) throw new HttpError(409, `${email} already exists`);
+      patch.email = email;
+    }
+    if (input.title !== undefined) patch.title = text(input.title);
+    if (input.team !== undefined) patch.team = text(input.team);
+    if (input.slackUserId !== undefined) {
+      const v = text(input.slackUserId)?.toUpperCase() ?? null;
+      if (v && !SLACK_ID_RE.test(v)) throw new HttpError(400, 'Not a Slack member ID (looks like U01ABC23DE)');
+      patch.slackUserId = v;
+    }
+    if (input.managerId !== undefined) {
+      if (input.managerId !== null) {
+        const m = people.find((p) => p.id === input.managerId);
+        if (!m) throw new HttpError(400, 'That manager does not exist');
+        if (!m.active) throw new HttpError(400, `${m.name} is deactivated and cannot manage anyone`);
+        if (current && wouldCycle(people, current.id, m.id)) throw new HttpError(409, 'That would make someone their own manager');
+      }
+      patch.managerId = input.managerId;
+    }
+    if (input.isManager !== undefined) patch.isManager = input.isManager;
+    if (input.isCompliance !== undefined) patch.isCompliance = input.isCompliance;
+    if (input.active !== undefined) patch.active = input.active;
+
+    if (current) {
+      const stillCompliant = (p: Person) => (p.id === current.id ? (patch.isCompliance ?? p.isCompliance) && (patch.active ?? p.active) : p.isCompliance && p.active);
+      if (!people.some(stillCompliant)) throw new HttpError(409, 'At least one active compliance user is required');
+      if (current.id === by.id && (patch.isCompliance === false || patch.active === false)) throw new HttpError(409, 'You cannot remove your own compliance access or deactivate yourself');
+    }
+    return patch;
+  }
+
+  async createPerson(by: Person, input: PersonInput): Promise<Person> {
+    requireCompliance(by);
+    if (!input.email) throw new HttpError(400, 'Email is required');
+    const patch = await this.validatePersonInput(by, input, null);
+    const email = patch.email!;
+    const p = await this.store.upsertPersonByEmail({ ...patch, email, name: patch.name ?? nameFromEmail(email) });
+    await this.audit({ ...person(by), action: 'person_added', detail: `Added ${p.name} (${p.email})` });
+    return p;
+  }
+
+  async updatePersonDetails(by: Person, id: number, input: PersonInput): Promise<Person> {
+    requireCompliance(by);
+    const current = await this.mustPerson(id);
+    const patch = await this.validatePersonInput(by, input, current);
+    if (Object.keys(patch).length === 0) return current;
+    const updated = await this.store.updatePerson(id, patch);
+    const changes = Object.keys(patch).map((k) => k.replace(/[A-Z]/g, (c) => ` ${c.toLowerCase()}`)).join(', ');
+    await this.audit({ ...person(by), action: patch.active === false ? 'person_deactivated' : patch.active === true && !current.active ? 'person_reactivated' : 'person_updated', detail: `${current.name}: changed ${changes}` });
+    return updated;
+  }
+
   async updatePolicy(by: Person, raw: unknown): Promise<Policy> {
     requireCompliance(by);
     const parsed = policyInput.safeParse(raw);

@@ -7,3 +7,4 @@ export * from './test-message.ts';
 export * from './errors.ts';
 export * from './ingest.ts';
 export { ACTION, ATTEST_MODAL } from './blocks.ts';
+export { inspectPeopleCsv, planPeopleImport } from './people-import.ts';

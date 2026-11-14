@@ -56,7 +56,9 @@ export const getSession = cache(async (): Promise<Session> => {
   const h = await headers();
   const c = await cookies();
   // The OAP gateway authenticates every request before it reaches the app and passes the user's email in this header.
-  const email = h.get(IDENTITY_HEADER)?.trim().toLowerCase();
+  // Local development has no gateway, so DEV_USER_EMAIL stands in for the header. It is ignored in production builds.
+  const dev = process.env.NODE_ENV !== 'production' ? process.env.DEV_USER_EMAIL : undefined;
+  const email = (h.get(IDENTITY_HEADER) ?? dev)?.trim().toLowerCase();
   if (!email) throw new NoAccessError('Not signed in');
 
   // Access is decided by the platform gate: anyone it lets in has full (compliance) access. Their person record is

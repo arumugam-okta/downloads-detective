@@ -61,6 +61,21 @@ export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<Fas
     const { slackUserId } = z.object({ slackUserId: z.string().regex(/^[UW][A-Z0-9]{2,}$/, 'Not a Slack member ID').optional() }).parse(req.body ?? {});
     return l.mapSlackUser(id(req), await actorOf(req), slackUserId);
   });
+  const personInput = z.object({
+    name: z.string().optional(), email: z.string().optional(), title: z.string().nullable().optional(), team: z.string().nullable().optional(),
+    managerId: z.number().int().positive().nullable().optional(), slackUserId: z.string().nullable().optional(),
+    isManager: z.boolean().optional(), isCompliance: z.boolean().optional(), active: z.boolean().optional(),
+  });
+  app.post('/people', async (req) => l.createPerson(await actorOf(req), personInput.parse(req.body ?? {})));
+  app.patch('/people/:id', async (req) => l.updatePersonDetails(await actorOf(req), id(req), personInput.parse(req.body ?? {})));
+  app.post<{ Body: string }>('/people/import/inspect', async (req) => {
+    if (typeof req.body !== 'string' || !req.body.trim()) throw new HttpError(400, 'Send the CSV as the request body with Content-Type: text/csv');
+    return l.inspectPeopleCsv(await actorOf(req), req.body);
+  });
+  app.post('/people/import', async (req) => {
+    const b = z.object({ csv: z.string().min(1), mapping: z.record(z.string(), z.string()), dryRun: z.boolean(), filename: z.string().optional() }).parse(req.body);
+    return l.importPeople(await actorOf(req), b.csv, b.mapping, { dryRun: b.dryRun, ...(b.filename ? { filename: b.filename } : {}) });
+  });
   app.put('/policy', async (req) => l.updatePolicy(await actorOf(req), req.body));
   app.get('/slack/status', async (req) => slackStatus(l, await actorOf(req), cfg));
   app.post('/slack/test', async (req) => {

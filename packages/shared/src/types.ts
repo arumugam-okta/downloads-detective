@@ -11,6 +11,8 @@ export interface Person {
   managerId: number | null;
   slackUserId: string | null;
   isCompliance: boolean;
+  /** Explicitly granted manager role. People who lead someone are managers regardless of this flag. */
+  isManager: boolean;
   active: boolean;
 }
 

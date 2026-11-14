@@ -58,10 +58,11 @@ export interface Viewer {
   scopeIds: Record<Role, Set<number>>;
 }
 
-/** Roles are derived from the data, never chosen: everyone is an engineer; managers have reports; compliance is a flag. */
+/** Everyone is an engineer. Manager is granted explicitly or implied by having reports; compliance is an explicit grant. */
 export function buildViewer(people: Person[], person: Person): Viewer {
   const kids = childrenMap(people);
-  const isManager = (kids.get(person.id)?.length ?? 0) > 0;
+  const leads = (kids.get(person.id)?.length ?? 0) > 0;
+  const isManager = leads || person.isManager;
   const roles: Role[] = ['engineer'];
   if (isManager) roles.push('manager');
   if (person.isCompliance) roles.push('compliance');
@@ -70,7 +71,7 @@ export function buildViewer(people: Person[], person: Person): Viewer {
     roles,
     scopeIds: {
       engineer: new Set([person.id]),
-      manager: isManager ? subtreeIds(people, person.id) : new Set([person.id]),
+      manager: leads ? subtreeIds(people, person.id) : new Set([person.id]),
       compliance: new Set(people.map((p) => p.id)),
     },
   };

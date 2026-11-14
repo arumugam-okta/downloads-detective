@@ -39,6 +39,7 @@ async function ShellLoader({ children }: { children: React.ReactNode }) {
         options: scope.options.map((o) => ({ value: o.value, label: o.label, depth: o.depth })),
       }}
       range={{ from: range.fromStr, to: range.toStr, label: range.label }}
+      workspaceName={process.env.WORKSPACE_NAME?.trim() || 'Okta engineering'}
       workspaceLabel={`${ROLE_LABEL[s.role]} workspace`}
       searchIndex={searchIndex}
     >
