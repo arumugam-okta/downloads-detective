@@ -69,9 +69,9 @@ export class Lifecycle {
   async refreshMessage(itemId: number): Promise<void> {
     const item = await this.mustItem(itemId);
     if (!item.slackChannel || !item.slackTs) return;
-    const files = await this.store.listFiles([itemId]);
+    const [files, engineer] = await Promise.all([this.store.listFiles([itemId]), this.mustPerson(item.engineerId)]);
     await this.quiet('update message', () =>
-      this.deps.notifier.update({ channel: item.slackChannel!, ts: item.slackTs! }, itemMessage(item, files, this.ctx())));
+      this.deps.notifier.update({ channel: item.slackChannel!, ts: item.slackTs! }, itemMessage(item, files, engineer, this.ctx())));
   }
 
   /** A fresh DM to the item's engineer (not a thread reply, so Slack notifies them). */
@@ -212,7 +212,7 @@ export class Lifecycle {
 
       if (item.state === 'triage' || item.state === 'failed') item = await store.updateItem(itemId, { state: 'open', error: null });
       const files = await store.listFiles([itemId]);
-      const sent = await deps.notifier.sendDirect(slackId, itemMessage(item, files, this.ctx()));
+      const sent = await deps.notifier.sendDirect(slackId, itemMessage(item, files, engineer, this.ctx()));
       await store.updateItem(itemId, { slackChannel: sent.channel, slackTs: sent.ts, error: null });
       for (const issue of await unresolved()) await store.resolveIssue(issue.id);
       await this.audit({ ...SYSTEM, itemId, importId: item.createdImportId, action: 'slack_notified', detail: `Sent Slack message to ${engineer.name}` });
@@ -266,7 +266,8 @@ export class Lifecycle {
     requireManagerOf(by, item.engineerId, await this.store.listPeople());
     if (item.state === 'closed') throw new HttpError(409, 'This item is already closed');
     if (!item.slackChannel) throw new HttpError(409, 'This item has not been delivered in Slack yet');
-    await this.deps.notifier.sendInDm(item.slackChannel, manualReminderMessage(item, by, this.ctx()));
+    const files = await this.store.listFiles([itemId]);
+    await this.deps.notifier.sendInDm(item.slackChannel, manualReminderMessage(item, files.length, by, this.ctx()));
     await this.audit({ ...person(by), itemId, action: 'manual_reminder', detail: 'Sent manual reminder' });
     return item;
   }
@@ -281,7 +282,10 @@ export class Lifecycle {
     // A manager escalating goes up to their director; compliance goes to the manager.
     const level = manager && by.id === manager.id ? 'director' : 'manager';
     const target = level === 'director' ? director : manager;
-    const msg = escalationMessage(item, engineer, level, this.ctx(), by);
+    const fileCount = (await this.store.listFiles([itemId])).length;
+    const policy = await this.store.getPolicy();
+    const directorAt = new Date(new Date(item.dueAt).getTime() + policy.directorAfterBreachHours * 3_600_000).toISOString();
+    const msg = escalationMessage(item, engineer, level, this.ctx(), { fileCount, directorAt, by });
     const told: string[] = [];
     if (target && (await this.dmPerson(target, msg))) told.push(target.name);
     const now = this.now().toISOString();

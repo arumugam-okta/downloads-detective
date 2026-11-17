@@ -49,8 +49,8 @@ export function StatusByEngineer({ data }: { data: Array<{ name: string; open: n
           <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
           <ChartTooltip content={<ChartTooltipContent />} />
           <ChartLegend content={<ChartLegendContent />} verticalAlign="top" />
-          <Bar dataKey="open" stackId="a" fill="var(--color-open)" radius={0} maxBarSize={14} stroke="var(--card)" strokeWidth={1} />
-          <Bar dataKey="acknowledged" stackId="a" fill="var(--color-acknowledged)" radius={0} maxBarSize={14} stroke="var(--card)" strokeWidth={1} />
+          <Bar dataKey="open" stackId="a" fill="var(--color-open)" radius={[0, 4, 4, 0]} maxBarSize={14} stroke="var(--card)" strokeWidth={1} />
+          <Bar dataKey="acknowledged" stackId="a" fill="var(--color-acknowledged)" radius={[0, 4, 4, 0]} maxBarSize={14} stroke="var(--card)" strokeWidth={1} />
           <Bar dataKey="overdue" stackId="a" fill="var(--color-overdue)" radius={[0, 4, 4, 0]} maxBarSize={14} stroke="var(--card)" strokeWidth={1} />
         </BarChart>
       </ChartContainer>
@@ -136,14 +136,14 @@ export function IngestedVsClosed({ data }: { data: Array<{ week: string; ingeste
   );
 }
 
-/** Stacked status bar: segments separated by a 2px surface gap, not a border. */
+/** Each segment is its own bar: square on the left, 4px round on the right, 2px apart (Figma "Data bar"). */
 export function StatusDistribution({ parts }: { parts: Array<{ key: string; label: string; value: number; color: string }> }) {
   const total = parts.reduce((n, p) => n + p.value, 0) || 1;
   return (
     <WithTable table={{ head: ['Status', 'Items'], rows: parts.map((p) => [p.label, p.value]) }}>
       <div>
-        <div className="flex h-6 w-full gap-0.5 overflow-hidden rounded-md" role="img" aria-label={parts.map((p) => `${p.label} ${p.value}`).join(', ')}>
-          {parts.filter((p) => p.value > 0).map((p) => <div key={p.key} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} title={`${p.label}: ${p.value}`} />)}
+        <div className="flex h-6 w-full gap-0.5" role="img" aria-label={parts.map((p) => `${p.label} ${p.value}`).join(', ')}>
+          {parts.filter((p) => p.value > 0).map((p) => <div key={p.key} className="rounded-r-[4px]" style={{ width: `${(p.value / total) * 100}%`, background: p.color }} title={`${p.label}: ${p.value}`} />)}
         </div>
         <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4">
           {parts.map((p) => (

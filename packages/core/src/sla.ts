@@ -47,7 +47,8 @@ async function remind(l: Lifecycle, item: Item, hours: number, result: TickResul
   // Record first: a Slack failure must not turn into a reminder on every tick.
   await l.store.updateItem(item.id, { remindersSent: [...item.remindersSent, hours] });
   item.remindersSent = [...item.remindersSent, hours];
-  await l.deps.notifier.sendInDm(item.slackChannel!, reminderMessage(item, l.ctx()));
+  const files = await l.store.listFiles([item.id]);
+  await l.deps.notifier.sendInDm(item.slackChannel!, reminderMessage(item, files.length, l.ctx()));
   const engineer = await l.mustPerson(item.engineerId);
   await l.audit({ ...SYSTEM, itemId: item.id, action: 'reminder_sent', detail: `Sent ${hours}h reminder to ${engineer.name}` });
   result.reminders++;
@@ -60,7 +61,10 @@ async function escalate(l: Lifecycle, item: Item, level: 'manager' | 'director',
   const at = l.now().toISOString();
   item = await l.store.updateItem(item.id, level === 'manager' ? { breachNotifiedAt: at } : { directorNotifiedAt: at });
 
-  const msg = escalationMessage(item, engineer, level, l.ctx());
+  const policy = await l.store.getPolicy();
+  const files = await l.store.listFiles([item.id]);
+  const directorAt = new Date(new Date(item.dueAt).getTime() + policy.directorAfterBreachHours * 3_600_000).toISOString();
+  const msg = escalationMessage(item, engineer, level, l.ctx(), { fileCount: files.length, directorAt });
   const delivered = target ? await l.dmPerson(target, msg).catch(() => false) : false;
   await l.audit({
     ...SYSTEM, itemId: item.id, action: level === 'manager' ? 'manager_notified' : 'director_notified',

@@ -7,21 +7,29 @@ export interface SlackMessage {
   blocks: KnownBlock[];
 }
 
-export const ACTION = { ACK: 'dd_ack', CONFIRM: 'dd_confirm', OPEN_WEB: 'dd_open_web' } as const;
+export const ACTION = { ACK: 'dd_ack', CONFIRM: 'dd_confirm', OPEN_WEB: 'dd_open_web', OPEN_TEAM: 'dd_open_team' } as const;
 export const ATTEST_MODAL = 'dd_attest_modal';
 
 /** Slack mrkdwn control characters. */
 export const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const header = (text: string): KnownBlock => ({ type: 'header', text: { type: 'plain_text', text: text.slice(0, 150), emoji: true } });
 const section = (text: string): KnownBlock => ({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });
+/** The design's bold lead line. Slack headers cannot be coloured or sized, so a bold section is closest. */
+const title = (text: string): KnownBlock => section(`*${text}*`);
 const context = (text: string): KnownBlock => ({ type: 'context', elements: [{ type: 'mrkdwn', text }] });
+const fields = (...pairs: Array<[label: string, value: string]>): KnownBlock => ({
+  type: 'section',
+  fields: pairs.map(([l, v]) => ({ type: 'mrkdwn' as const, text: `*${l}*\n${v}` })),
+});
 
-/** Renders in each reader's own timezone. */
-export const slackDate = (iso: string): string => {
-  const secs = Math.floor(new Date(iso).getTime() / 1000);
-  return `<!date^${secs}^{date_short_pretty}|${iso.slice(0, 10)}>`;
-};
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const monthDay = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const hhmm = (d: Date) => d.toISOString().slice(11, 16);
+/** "Nov 16, 2026 · 06:01 UTC". The designs show UTC, so every reader sees the same time. */
+export const utcFull = (iso: string): string => { const d = new Date(iso); return `${monthDay.format(d)}, ${d.getUTCFullYear()} · ${hhmm(d)} UTC`; };
+/** "Nov 16 at 06:01 UTC" */
+export const utcAt = (iso: string): string => { const d = new Date(iso); return `${monthDay.format(d)} at ${hhmm(d)} UTC`; };
 
 export interface MessageContext {
   webUrl: string;
@@ -29,48 +37,79 @@ export interface MessageContext {
 }
 
 const itemUrl = (c: MessageContext, item: Item) => `${c.webUrl}/items/${item.id}`;
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const firstName = (p: Person) => esc(p.name.split(/\s+/)[0] ?? p.name);
+const caseRef = (item: Item) => `Case #${esc(item.caseNumber)}`;
+const policyDays = (item: Item) => Math.max(1, Math.round((new Date(item.dueAt).getTime() - new Date(item.caseClosedAt).getTime()) / DAY));
 
-function fileList(files: ItemFile[]): string {
-  const shown = files.slice(0, 10).map((f) => `• \`${f.filename.replace(/`/g, "'")}\``);
-  const more = files.length - shown.length;
-  return [...shown, ...(more > 0 ? [`_+${more} more_`] : [])].join('\n');
+const button = (action_id: string, text: string, extra: { value?: string; url?: string; primary?: boolean } = {}): Button => ({
+  type: 'button', action_id, text: { type: 'plain_text', text },
+  ...(extra.value ? { value: extra.value } : {}), ...(extra.url ? { url: extra.url } : {}), ...(extra.primary ? { style: 'primary' as const } : {}),
+});
+
+/** "24 hours remaining" / "2 days remaining", rounded the way the designs read. */
+function remaining(item: Item, now: Date): string {
+  const h = Math.max(1, Math.round((new Date(item.dueAt).getTime() - now.getTime()) / HOUR));
+  return h < 48 ? `${plural(h, 'hour')} remaining` : `${plural(Math.round(h / 24), 'day')} remaining`;
 }
+const dueLine = (item: Item, now: Date) =>
+  now >= new Date(item.dueAt) ? `:rotating_light: Overdue since ${utcAt(item.dueAt)}` : `:warning: Due ${utcAt(item.dueAt)} · ${remaining(item, now)}`;
 
-function statusLine(item: Item, now: Date): string {
-  switch (displayStatus(item.state, new Date(item.dueAt), now)) {
-    case 'closed': {
-      const what = item.attestationKind ? ATTESTATION_LABEL[item.attestationKind] : 'Resolved';
-      return `:white_check_mark: *Closed.* ${esc(what)}${item.attestationNotes ? `: ${esc(item.attestationNotes)}` : ''}`;
-    }
-    case 'acknowledged': return ':eyes: *Acknowledged.* Still needs confirmation.';
-    case 'overdue': return `:rotating_light: *Overdue.* It was due ${slackDate(item.dueAt)}.`;
-    default: return `:hourglass_flowing_sand: *Open.* Due ${slackDate(item.dueAt)}.`;
+const REASON = 'You\u2019re receiving this private reminder because you downloaded these files.';
+
+/** What the engineer attested, in the confirmation's own words. */
+function attestedSentence(item: Item, files: ItemFile[]): string {
+  const n = files.length;
+  switch (item.attestationKind) {
+    case 'deleted': return `that ${n === 1 ? 'the local file was' : `all ${n} local files were`} deleted`;
+    case 'approved_location': return `that ${n === 1 ? 'the local file is' : `all ${n} local files are`} in an approved location`;
+    case 'not_applicable': return 'that cleanup does not apply';
+    default: return 'for this cleanup';
   }
 }
 
-/** The engineer's message. Re-rendered in place as the item moves through its lifecycle. */
-export function itemMessage(item: Item, files: ItemFile[], c: MessageContext): SlackMessage {
-  const title = `Action needed: Salesforce case #${item.caseNumber}`;
+/**
+ * The engineer's message. Re-rendered in place as the item moves through its lifecycle, so the same function
+ * covers the first prompt (open), acknowledged, overdue, and the confirmation (closed).
+ */
+export function itemMessage(item: Item, files: ItemFile[], engineer: Person, c: MessageContext): SlackMessage {
+  const status = displayStatus(item.state, new Date(item.dueAt), c.now);
+  const n = files.length;
+
+  if (status === 'closed') {
+    const text = 'Cleanup confirmed';
+    const blocks: KnownBlock[] = [
+      section(':white_check_mark: *Cleanup confirmed*'),
+      section(
+        `Thanks, ${firstName(engineer)}. Your attestation ${attestedSentence(item, files)} is recorded for ${caseRef(item)}.` +
+          (item.attestationNotes ? `\n>${esc(item.attestationNotes).replace(/\n/g, '\n>')}` : ''),
+      ),
+      context(`Recorded ${utcAt(item.attestedAt ?? c.now.toISOString())} \u00b7 Reminders stopped`),
+      { type: 'actions', elements: [button(ACTION.OPEN_WEB, 'View record', { url: itemUrl(c, item) })] },
+    ];
+    return { text, blocks };
+  }
+
+  const overdue = status === 'overdue';
+  const text = overdue ? `Overdue: cleanup for case #${item.caseNumber}` : `Action needed: cleanup for case #${item.caseNumber}`;
+  const buttons: Button[] = [button(ACTION.CONFIRM, 'Review & confirm', { value: String(item.id), primary: true })];
+  if (item.state === 'open') buttons.push(button(ACTION.ACK, 'Acknowledge', { value: String(item.id) }));
+  else buttons.push(button(ACTION.OPEN_WEB, 'View cleanup item', { url: itemUrl(c, item) }));
+
+  const foot = overdue ? 'Overdue \u00b7 Please confirm as soon as you can.'
+    : item.state === 'acknowledged' ? 'Acknowledged \u00b7 You still need to confirm the cleanup.'
+      : `${policyDays(item)}-calendar-day policy \u00b7 Acknowledging does not complete cleanup.`;
   const blocks: KnownBlock[] = [
-    header(title),
+    title(overdue ? 'This cleanup is overdue.' : 'A closed case needs a quick cleanup.'),
     section(
-      `${item.caseSubject ? `*${esc(item.caseSubject)}*\n` : ''}You downloaded these files from a closed Salesforce case. ` +
-        'Please delete your local copies, or confirm they are stored in an approved location.',
+      `Hi ${firstName(engineer)} \u2014 ${caseRef(item)} is closed. Please delete the ${plural(n, 'local file')} you downloaded, or confirm an approved exception.` +
+        (item.caseSubject ? `\n_${esc(item.caseSubject)}_` : ''),
     ),
-    section(fileList(files)),
-    context(`${item.ref} · Case closed ${slackDate(item.caseClosedAt)} · Due ${slackDate(item.dueAt)}`),
-    section(statusLine(item, c.now)),
+    fields(['Case', caseRef(item)], [overdue ? 'Was due' : 'Cleanup due', utcFull(item.dueAt)]),
+    { type: 'actions', elements: buttons },
+    context(foot),
   ];
-  const buttons: Button[] = [];
-  if (item.state === 'open') {
-    buttons.push({ type: 'button', action_id: ACTION.ACK, value: String(item.id), text: { type: 'plain_text', text: 'Acknowledge' } });
-  }
-  if (item.state === 'open' || item.state === 'acknowledged') {
-    buttons.push({ type: 'button', action_id: ACTION.CONFIRM, value: String(item.id), style: 'primary', text: { type: 'plain_text', text: 'Confirm action taken' } });
-  }
-  buttons.push({ type: 'button', action_id: ACTION.OPEN_WEB, url: itemUrl(c, item), text: { type: 'plain_text', text: 'View details' } });
-  blocks.push({ type: 'actions', elements: buttons });
-  return { text: title, blocks };
+  return { text, blocks };
 }
 
 export function attestModal(item: Item): ModalView {
@@ -105,48 +144,86 @@ export function attestModal(item: Item): ModalView {
   };
 }
 
-export function reminderMessage(item: Item, c: MessageContext): SlackMessage {
-  const text = `Reminder: case #${item.caseNumber} cleanup is still open`;
+/** Scheduled reminder. "Due tomorrow" when under a day and a half is left, otherwise the remaining time. */
+export function reminderMessage(item: Item, fileCount: number, c: MessageContext): SlackMessage {
+  const left = new Date(item.dueAt).getTime() - c.now.getTime();
+  const lead = left <= 0 ? 'Reminder: cleanup is overdue.' : left <= 36 * HOUR ? 'Reminder: cleanup is due tomorrow.' : `Reminder: cleanup is due in ${plural(Math.round(left / DAY), 'day')}.`;
   return {
-    text,
-    blocks: [section(`:bell: *Reminder.* Cleanup for case #${esc(item.caseNumber)} (${item.ref}) is due ${slackDate(item.dueAt)}.`),
-      { type: 'actions', elements: [{ type: 'button', action_id: ACTION.OPEN_WEB, url: itemUrl(c, item), text: { type: 'plain_text', text: 'View details' } }] }],
-  };
-}
-
-export function manualReminderMessage(item: Item, by: Person, c: MessageContext): SlackMessage {
-  const text = `${by.name} sent a reminder for case #${item.caseNumber}`;
-  return {
-    text,
-    blocks: [section(`:bell: *${esc(by.name)}* sent a reminder: cleanup for case #${esc(item.caseNumber)} (${item.ref}) is due ${slackDate(item.dueAt)}.`),
-      { type: 'actions', elements: [{ type: 'button', action_id: ACTION.OPEN_WEB, url: itemUrl(c, item), text: { type: 'plain_text', text: 'View details' } }] }],
-  };
-}
-
-export function escalationMessage(item: Item, engineer: Person, level: 'manager' | 'director', c: MessageContext, by?: Person): SlackMessage {
-  const text = `SLA missed: case #${item.caseNumber} (${engineer.name})`;
-  const lead = level === 'manager' ? 'SLA missed' : 'Still unresolved after escalation';
-  return {
-    text,
+    text: `Reminder: cleanup for case #${item.caseNumber} is still open`,
     blocks: [
-      header(lead),
-      section(
-        `*${esc(engineer.name)}* has not completed the cleanup for case #${esc(item.caseNumber)} (${item.ref}). It was due ${slackDate(item.dueAt)}.` +
-          (by ? `\nEscalated by ${esc(by.name)}.` : ''),
-      ),
-      { type: 'actions', elements: [{ type: 'button', action_id: ACTION.OPEN_WEB, url: itemUrl(c, item), style: 'danger', text: { type: 'plain_text', text: 'Review item' } }] },
+      title(lead),
+      section(`The ${plural(fileCount, 'file')} from ${caseRef(item)} still ${fileCount === 1 ? 'needs' : 'need'} your attention. After you delete ${fileCount === 1 ? 'it' : 'them'}, confirm the action here.`),
+      section(dueLine(item, c.now)),
+      { type: 'actions', elements: [button(ACTION.CONFIRM, 'Review & confirm', { value: String(item.id), primary: true }), button(ACTION.OPEN_WEB, 'View cleanup item', { url: itemUrl(c, item) })] },
+      context(REASON),
     ],
   };
 }
 
+/** A manager nudging an engineer by hand. Same shape as the scheduled reminder, with who sent it. */
+export function manualReminderMessage(item: Item, fileCount: number, by: Person, c: MessageContext): SlackMessage {
+  return {
+    text: `${by.name} sent a reminder for case #${item.caseNumber}`,
+    blocks: [
+      title('A reminder to finish your cleanup.'),
+      section(`${esc(by.name)} asked you to finish the cleanup for ${caseRef(item)}. Please delete the ${plural(fileCount, 'local file')}, or confirm an approved exception.`),
+      section(dueLine(item, c.now)),
+      { type: 'actions', elements: [button(ACTION.CONFIRM, 'Review & confirm', { value: String(item.id), primary: true }), button(ACTION.OPEN_WEB, 'View cleanup item', { url: itemUrl(c, item) })] },
+      context(REASON),
+    ],
+  };
+}
+
+export interface EscalationOptions {
+  /** Local files on the item, for the sentence "so the 3 local files are deleted". */
+  fileCount: number;
+  /** When the director is told if still unresolved. Only meaningful for the manager notice. */
+  directorAt?: string | null;
+  by?: Person | undefined;
+}
+
+/** Manager (or director) notice. Sent as a private DM; Slack gives it no colour, so the lead line carries the urgency. */
+export function escalationMessage(item: Item, engineer: Person, level: 'manager' | 'director', c: MessageContext, o: EscalationOptions): SlackMessage {
+  const text = `SLA missed: case #${item.caseNumber} (${engineer.name})`;
+  const foot = level === 'manager'
+    ? `Manager notified at SLA breach${o.directorAt ? ` \u00b7 Escalates to director ${utcAt(o.directorAt)} if unresolved.` : '.'}`
+    : 'Director notified after the manager escalation went unresolved.';
+  return {
+    text,
+    blocks: [
+      title(`:red_circle: ${level === 'manager' ? 'A cleanup item needs your follow-up.' : 'A cleanup item is still unresolved.'}`),
+      section(
+        `${esc(engineer.name)} has 1 overdue cleanup item from ${caseRef(item)}. Please follow up so the ${plural(o.fileCount, 'local file')} ${o.fileCount === 1 ? 'is' : 'are'} deleted or an approved exception is recorded.` +
+          (o.by ? `\n_Escalated by ${esc(o.by.name)}._` : ''),
+      ),
+      fields(['Case', caseRef(item)], ['Deadline missed', utcFull(item.dueAt)]),
+      {
+        type: 'actions',
+        elements: [
+          button(ACTION.OPEN_WEB, 'Review overdue item', { url: itemUrl(c, item), primary: true }),
+          button(ACTION.OPEN_TEAM, 'View team cleanup', { url: `${c.webUrl}/team` }),
+        ],
+      },
+      context(foot),
+      context('Private message to the direct manager \u00b7 Case access follows the reporting hierarchy.'),
+    ],
+  };
+}
+
+const fileList = (files: ItemFile[]): string => {
+  const shown = files.slice(0, 10).map((f) => `\u2022 \`${f.filename.replace(/\`/g, "'")}\``);
+  const more = files.length - shown.length;
+  return [...shown, ...(more > 0 ? [`_+${more} more_`] : [])].join('\n');
+};
+
 export function filesAddedMessage(item: Item, added: ItemFile[]): SlackMessage {
-  return { text: `More files reported for case #${item.caseNumber}`, blocks: [section(`:paperclip: *More downloads reported* for case #${esc(item.caseNumber)}:\n${fileList(added)}`)] };
+  return { text: `More files reported for case #${item.caseNumber}`, blocks: [section(`:paperclip: *More downloads reported* for ${caseRef(item)}:\n${fileList(added)}`)] };
 }
 
 export function reopenedNotice(item: Item): SlackMessage {
-  return { text: `Case #${item.caseNumber} reopened`, blocks: [section(`:arrows_counterclockwise: Case #${esc(item.caseNumber)} was reopened because new downloads were reported.`)] };
+  return { text: `Case #${item.caseNumber} reopened`, blocks: [section(`:arrows_counterclockwise: ${caseRef(item)} was reopened because new downloads were reported.`)] };
 }
 
 export function reassignedNotice(item: Item, to: Person): SlackMessage {
-  return { text: `Case #${item.caseNumber} reassigned`, blocks: [section(`:arrow_right: Case #${esc(item.caseNumber)} (${item.ref}) was reassigned to *${esc(to.name)}*.`)] };
+  return { text: `Case #${item.caseNumber} reassigned`, blocks: [section(`:arrow_right: ${caseRef(item)} was reassigned to *${esc(to.name)}*.`)] };
 }

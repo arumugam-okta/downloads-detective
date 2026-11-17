@@ -24,7 +24,8 @@ export function createSlackApp(l: Lifecycle, tokens: { botToken: string; appToke
   const tell = (userId: string, channel: string, text: string) =>
     app.client.chat.postEphemeral({ channel, user: userId, text }).catch(() => undefined);
 
-  app.action(ACTION.OPEN_WEB, async ({ ack }) => { await ack(); }); // link button: Slack opens the URL itself
+  // Link buttons: Slack opens the URL itself, the action only needs acknowledging.
+  for (const id of [ACTION.OPEN_WEB, ACTION.OPEN_TEAM]) app.action(id, async ({ ack }) => { await ack(); });
 
   app.action(ACTION.ACK, async ({ ack, body, action }) => {
     await ack();
