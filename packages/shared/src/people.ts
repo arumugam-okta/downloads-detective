@@ -72,3 +72,48 @@ export const personRoles = (p: Pick<Person, 'isManager' | 'isCompliance'>, repor
   ...(p.isManager || reports > 0 ? (['manager'] as const) : []),
   ...(p.isCompliance ? (['compliance'] as const) : []),
 ];
+
+/** What a Slack profile contributes to a person. Each value is null when the profile leaves it blank. */
+export interface SlackProfile {
+  slackUserId: string;
+  email: string;
+  name: string;
+  title: string | null;
+  department: string | null;
+  division: string | null;
+  organization: string | null;
+  costCenter: string | null;
+  employeeNumber: string | null;
+  employeeType: string | null;
+  location: string | null;
+  timezone: string | null;
+  /** The Slack user id in the Manager field. */
+  managerSlackId: string | null;
+}
+
+export interface SlackSyncRow {
+  email: string;
+  name: string;
+  action: 'create' | 'update' | 'unchanged';
+  /** Field -> [before, after], only for fields that change. */
+  changes: Record<string, [string | null, string | null]>;
+  manager: string | null;
+  managerChange: 'set' | 'changed' | 'kept-manual' | 'unresolved' | null;
+}
+
+export interface SlackSyncResult {
+  dryRun: boolean;
+  scanned: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  managersLinked: number;
+  /** Manager set in Slack but the person has a manual manager, so it was left alone. */
+  managersKeptManual: number;
+  withoutManager: number;
+  issues: PeopleIssue[];
+  rows: SlackSyncRow[];
+  /** Fields the workspace's Slack profile does not define, so nothing can be synced for them. */
+  missingFields: string[];
+  syncedAt: string;
+}

@@ -33,6 +33,7 @@ export interface Backend {
   uploadReport(actor: Person, csv: string, filename: string): Promise<BackendResult>;
   inspectPeople(actor: Person, csv: string): Promise<BackendResult>;
   importPeople(actor: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string): Promise<BackendResult>;
+  syncSlack(actor: Person, dryRun: boolean, createMissing: boolean): Promise<BackendResult>;
   createPerson(actor: Person, input: PersonInput): Promise<BackendResult>;
   updatePerson(actor: Person, id: number, input: PersonInput): Promise<BackendResult>;
   slackStatus(actor: Person): Promise<BackendResult>;
@@ -77,6 +78,7 @@ class InProcessBackend implements Backend {
   }
   inspectPeople(a: Person, csv: string) { return this.run(async (r) => r.lifecycle.inspectPeopleCsv(a, csv)); }
   importPeople(a: Person, csv: string, m: PeopleMapping, dryRun: boolean, filename: string) { return this.run((r) => r.lifecycle.importPeople(a, csv, m, { dryRun, filename })); }
+  syncSlack(a: Person, dryRun: boolean, createMissing: boolean) { return this.run((r) => r.lifecycle.syncFromSlack(a, { dryRun, createMissing })); }
   createPerson(a: Person, input: PersonInput) { return this.run((r) => r.lifecycle.createPerson(a, input)); }
   updatePerson(a: Person, id: number, input: PersonInput) { return this.run((r) => r.lifecycle.updatePersonDetails(a, id, input)); }
   async slackStatus(a: Person) {
@@ -129,6 +131,7 @@ class HttpBackend implements Backend {
   importPeople(a: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string) {
     return this.call(a, 'POST', '/people/import', { csv, mapping, dryRun, filename });
   }
+  syncSlack(a: Person, dryRun: boolean, createMissing: boolean) { return this.call(a, 'POST', '/people/slack-sync', { dryRun, createMissing }); }
   createPerson(a: Person, input: PersonInput) { return this.call(a, 'POST', '/people', input); }
   updatePerson(a: Person, id: number, input: PersonInput) { return this.call(a, 'PATCH', `/people/${id}`, input); }
   slackStatus(a: Person) { return this.call(a, 'GET', '/slack/status'); }

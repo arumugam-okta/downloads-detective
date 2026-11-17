@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getBackend } from './backend';
 import { getSession, ROLE_HOME } from './session';
-import type { PeopleCsvInspection, PeopleImportResult, PeopleMapping, PersonInput, Role } from '@dd/shared';
+import type { PeopleCsvInspection, PeopleImportResult, PeopleMapping, PersonInput, Role, SlackSyncResult } from '@dd/shared';
 
 export interface ActionResult {
   ok: boolean;
@@ -94,4 +94,7 @@ export async function createPerson(input: PersonInput): Promise<ActionResult> {
 }
 export async function updatePerson(id: number, input: PersonInput): Promise<ActionResult> {
   return getBackend().updatePerson(await actor(), id, input);
+}
+export async function syncSlack(dryRun: boolean, createMissing: boolean): Promise<ActionResult & { data?: SlackSyncResult }> {
+  return getBackend().syncSlack(await actor(), dryRun, createMissing) as Promise<ActionResult & { data?: SlackSyncResult }>;
 }

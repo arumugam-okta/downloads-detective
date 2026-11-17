@@ -23,6 +23,9 @@ export interface UserRow {
   managerId: number | null;
   managerName: string | null;
   slackUserId: string | null;
+  department: string | null;
+  costCenter: string | null;
+  managerSource: 'slack' | 'manual' | null;
   isManager: boolean;
   isCompliance: boolean;
   active: boolean;
@@ -116,8 +119,8 @@ export function UsersTable({ rows, teams, meId }: { rows: UserRow[]; teams: stri
                     <div className="min-w-0"><div className="truncate font-medium">{r.name}{r.id === meId && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}</div><div className="truncate text-xs text-muted-foreground">{r.title ? `${r.title} · ` : ''}{r.email}</div></div>
                   </div>
                 </td>
-                <td className="px-4 text-muted-foreground">{r.team ?? '—'}</td>
-                <td className="px-4">{r.managerName ?? <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-4 text-muted-foreground"><div>{r.team ?? '—'}</div>{r.costCenter && <div className="text-[11px]">CC {r.costCenter}</div>}</td>
+                <td className="px-4">{r.managerName ?? <span className="text-muted-foreground">—</span>}{r.managerName && r.managerSource === 'slack' && <span className="ml-1.5 text-[11px] text-muted-foreground">via Slack</span>}</td>
                 <td className="px-4">
                   <div className="flex flex-wrap gap-1">
                     <RolePill tone={r.active ? 'engineer' : 'off'}>{r.active ? 'Engineer' : 'Inactive'}</RolePill>

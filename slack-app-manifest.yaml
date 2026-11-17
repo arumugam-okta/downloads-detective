@@ -19,6 +19,7 @@ oauth_config:
       - chat:write          # send and update DMs, ephemeral errors
       - users:read          # look up a user (users.info)
       - users:read.email    # match a report email to a Slack user
+      - users.profile:read  # Users > Sync from Slack: manager, department, cost center
 settings:
   interactivity:
     is_enabled: true        # buttons + the confirmation modal; Socket Mode, so no request URL

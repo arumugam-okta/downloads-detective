@@ -1,6 +1,6 @@
 import {
   ATTESTATION_LABEL, SYSTEM_ACTOR, attestationInput, dueAtFor, escalationTargets,
-  SLACK_ID_RE, type AttestationInput, type Item, type PeopleCsvInspection, type PeopleImportResult, type PeopleMapping, type Person, type PersonInput, type Policy,
+  SLACK_ID_RE, type AttestationInput, type Item, type PeopleCsvInspection, type PeopleImportResult, type PeopleMapping, type Person, type PersonInput, type Policy, type SlackSyncResult,
 } from '@dd/shared';
 import { fingerprintOf, type NewAudit, type Store } from '@dd/db';
 import {
@@ -11,6 +11,7 @@ import { requireCompliance, requireEngineer, requireManagerOf } from './authz.ts
 import { HttpError } from './errors.ts';
 import { nameFromEmail, parseReport } from './ingest.ts';
 import { inspectPeopleCsv, planPeopleImport, wouldCycle } from './people-import.ts';
+import { planSlackSync } from './slack-sync.ts';
 import type { Notifier } from './notifier.ts';
 import { z, ZodError } from 'zod';
 
@@ -382,7 +383,7 @@ export class Lifecycle {
     }
     const all = await this.store.listPeople();
     const idOf = new Map(all.map((x) => [x.email, x.id]));
-    for (const [email, mgr] of links) await this.store.updatePerson(idOf.get(email)!, { managerId: idOf.get(mgr)! });
+    for (const [email, mgr] of links) await this.store.updatePerson(idOf.get(email)!, { managerId: idOf.get(mgr)!, managerSource: 'manual' });
     await this.audit({
       ...person(by), action: 'people_imported',
       detail: `${opts.filename ?? 'people.csv'}: ${plan.created} added, ${plan.updated} updated, ${plan.managersLinked} manager links`,
@@ -419,6 +420,7 @@ export class Lifecycle {
         if (current && wouldCycle(people, current.id, m.id)) throw new HttpError(409, 'That would make someone their own manager');
       }
       patch.managerId = input.managerId;
+      patch.managerSource = input.managerId === null ? null : 'manual';
     }
     if (input.isManager !== undefined) patch.isManager = input.isManager;
     if (input.isCompliance !== undefined) patch.isCompliance = input.isCompliance;
@@ -430,6 +432,35 @@ export class Lifecycle {
       if (current.id === by.id && (patch.isCompliance === false || patch.active === false)) throw new HttpError(409, 'You cannot remove your own compliance access or deactivate yourself');
     }
     return patch;
+  }
+
+  /**
+   * Pulls people, managers and profile fields (department, cost center, ...) from Slack. With dryRun it only reports.
+   * Manager links set by hand or CSV are kept; only links that came from Slack are refreshed.
+   */
+  async syncFromSlack(by: Person, opts: { dryRun: boolean; createMissing: boolean }): Promise<SlackSyncResult> {
+    requireCompliance(by);
+    const dir = await this.deps.notifier.listProfiles();
+    if (!dir) throw new HttpError(409, 'Slack is not connected. Set SLACK_BOT_TOKEN and restart.');
+    const plan = planSlackSync(dir.profiles, await this.store.listPeople(), { createMissing: opts.createMissing });
+    const { planned, links, ...summary } = plan;
+    const issues = [...plan.issues, ...dir.failed.map((f) => ({ rowNo: 0, email: f.slackUserId, level: 'warning' as const, message: `Profile could not be read: ${f.error}` }))];
+    const syncedAt = this.now().toISOString();
+    const result: SlackSyncResult = { ...summary, issues, missingFields: dir.missingFields, dryRun: opts.dryRun, syncedAt };
+    if (opts.dryRun) return result;
+
+    for (const p of planned) {
+      if (!p.existing) await this.store.upsertPersonByEmail({ ...p.create, slackSyncedAt: syncedAt });
+      else if (Object.keys(p.patch).length) await this.store.updatePerson(p.existing.id, { ...p.patch, slackSyncedAt: syncedAt });
+    }
+    const all = await this.store.listPeople();
+    const idOf = new Map(all.map((x) => [x.email, x.id]));
+    for (const [email, mgr] of links) {
+      const id = idOf.get(email), mid = idOf.get(mgr);
+      if (id && mid) await this.store.updatePerson(id, { managerId: mid, managerSource: 'slack', slackSyncedAt: syncedAt });
+    }
+    await this.audit({ ...person(by), action: 'slack_synced', detail: `Slack sync: ${plan.created} added, ${plan.updated} updated, ${plan.managersLinked} manager links (${plan.scanned} profiles)` });
+    return result;
   }
 
   async createPerson(by: Person, input: PersonInput): Promise<Person> {

@@ -14,6 +14,18 @@ export interface Person {
   /** Explicitly granted manager role. People who lead someone are managers regardless of this flag. */
   isManager: boolean;
   active: boolean;
+  /** Profile data pulled from Slack. Null until a sync has run. */
+  department: string | null;
+  division: string | null;
+  organization: string | null;
+  costCenter: string | null;
+  employeeNumber: string | null;
+  employeeType: string | null;
+  location: string | null;
+  timezone: string | null;
+  /** Where managerId came from: a Slack sync overwrites 'slack' links only, never 'manual' ones. */
+  managerSource: 'slack' | 'manual' | null;
+  slackSyncedAt: string | null;
 }
 
 export interface Item {

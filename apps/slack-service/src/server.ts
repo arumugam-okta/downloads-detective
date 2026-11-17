@@ -76,6 +76,10 @@ export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<Fas
     const b = z.object({ csv: z.string().min(1), mapping: z.record(z.string(), z.string()), dryRun: z.boolean(), filename: z.string().optional() }).parse(req.body);
     return l.importPeople(await actorOf(req), b.csv, b.mapping, { dryRun: b.dryRun, ...(b.filename ? { filename: b.filename } : {}) });
   });
+  app.post('/people/slack-sync', async (req) => {
+    const b = z.object({ dryRun: z.boolean(), createMissing: z.boolean().default(true) }).parse(req.body ?? {});
+    return l.syncFromSlack(await actorOf(req), b);
+  });
   app.put('/policy', async (req) => l.updatePolicy(await actorOf(req), req.body));
   app.get('/slack/status', async (req) => slackStatus(l, await actorOf(req), cfg));
   app.post('/slack/test', async (req) => {
