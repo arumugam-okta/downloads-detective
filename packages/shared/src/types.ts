@@ -42,8 +42,10 @@ export interface Item {
   createdAt: string;
   acknowledgedAt: string | null;
   remindersSent: number[];
-  breachNotifiedAt: string | null;
-  directorNotifiedAt: string | null;
+  /** Escalation levels already told: 1 = direct manager, 2 = their manager, and so on. */
+  escalationsSent: number[];
+  /** When the most recent escalation went out. Spaces levels apart even when a tick runs late. */
+  escalatedAt: string | null;
   attestationKind: AttestationKind | null;
   attestationNotes: string | null;
   attestedAt: string | null;

@@ -23,6 +23,7 @@ export interface TestResult {
  */
 export async function sendTest(l: Lifecycle, by: Person, email: string): Promise<TestResult> {
   requireCompliance(by);
+  await l.requireSlack();
   const { store } = l;
   const now = l.now();
   const stamp = now.toISOString().replace(/[-:T.Z]/g, '').slice(2, 14);

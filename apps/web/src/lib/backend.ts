@@ -1,5 +1,5 @@
 import 'server-only';
-import type { PeopleMapping, Person, PersonInput } from '@dd/shared';
+import type { PeopleMapping, Person, PersonInput, SlackSyncRequest } from '@dd/shared';
 
 export interface BackendResult {
   ok: boolean;
@@ -10,7 +10,8 @@ export interface BackendResult {
 export interface PolicyInput {
   slaDays: number;
   reminderHours: number[];
-  directorAfterBreachHours: number;
+  escalationLevels: number;
+  escalationStepHours: number;
 }
 
 /**
@@ -33,9 +34,11 @@ export interface Backend {
   uploadReport(actor: Person, csv: string, filename: string): Promise<BackendResult>;
   inspectPeople(actor: Person, csv: string): Promise<BackendResult>;
   importPeople(actor: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string): Promise<BackendResult>;
-  syncSlack(actor: Person, dryRun: boolean, createMissing: boolean): Promise<BackendResult>;
+  readSlackDirectory(actor: Person): Promise<BackendResult>;
+  syncSlack(actor: Person, req: SlackSyncRequest): Promise<BackendResult>;
   createPerson(actor: Person, input: PersonInput): Promise<BackendResult>;
   updatePerson(actor: Person, id: number, input: PersonInput): Promise<BackendResult>;
+  setSlackEnabled(actor: Person, enabled: boolean): Promise<BackendResult>;
   slackStatus(actor: Person): Promise<BackendResult>;
   sendTest(actor: Person, email?: string): Promise<BackendResult>;
 }
@@ -78,9 +81,11 @@ class InProcessBackend implements Backend {
   }
   inspectPeople(a: Person, csv: string) { return this.run(async (r) => r.lifecycle.inspectPeopleCsv(a, csv)); }
   importPeople(a: Person, csv: string, m: PeopleMapping, dryRun: boolean, filename: string) { return this.run((r) => r.lifecycle.importPeople(a, csv, m, { dryRun, filename })); }
-  syncSlack(a: Person, dryRun: boolean, createMissing: boolean) { return this.run((r) => r.lifecycle.syncFromSlack(a, { dryRun, createMissing })); }
+  readSlackDirectory(a: Person) { return this.run((r) => r.lifecycle.readSlackDirectory(a)); }
+  syncSlack(a: Person, req: SlackSyncRequest) { return this.run((r) => r.lifecycle.syncFromSlack(a, req)); }
   createPerson(a: Person, input: PersonInput) { return this.run((r) => r.lifecycle.createPerson(a, input)); }
   updatePerson(a: Person, id: number, input: PersonInput) { return this.run((r) => r.lifecycle.updatePersonDetails(a, id, input)); }
+  setSlackEnabled(a: Person, enabled: boolean) { return this.run((r) => r.lifecycle.setSlackEnabled(a, enabled)); }
   async slackStatus(a: Person) {
     return this.run(async (r) => (await import('@dd/core')).slackStatus(r.lifecycle, a, r.cfg));
   }
@@ -131,9 +136,11 @@ class HttpBackend implements Backend {
   importPeople(a: Person, csv: string, mapping: PeopleMapping, dryRun: boolean, filename: string) {
     return this.call(a, 'POST', '/people/import', { csv, mapping, dryRun, filename });
   }
-  syncSlack(a: Person, dryRun: boolean, createMissing: boolean) { return this.call(a, 'POST', '/people/slack-sync', { dryRun, createMissing }); }
+  readSlackDirectory(a: Person) { return this.call(a, 'GET', '/people/slack-directory'); }
+  syncSlack(a: Person, req: SlackSyncRequest) { return this.call(a, 'POST', '/people/slack-sync', req); }
   createPerson(a: Person, input: PersonInput) { return this.call(a, 'POST', '/people', input); }
   updatePerson(a: Person, id: number, input: PersonInput) { return this.call(a, 'PATCH', `/people/${id}`, input); }
+  setSlackEnabled(a: Person, enabled: boolean) { return this.call(a, 'PUT', '/slack/enabled', { enabled }); }
   slackStatus(a: Person) { return this.call(a, 'GET', '/slack/status'); }
   sendTest(a: Person, email?: string) { return this.call(a, 'POST', '/slack/test', email ? { email } : {}); }
 }

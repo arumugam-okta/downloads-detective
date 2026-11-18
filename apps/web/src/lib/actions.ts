@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getBackend } from './backend';
 import { getSession, ROLE_HOME } from './session';
-import type { PeopleCsvInspection, PeopleImportResult, PeopleMapping, PersonInput, Role, SlackSyncResult } from '@dd/shared';
+import type { PeopleCsvInspection, PeopleImportResult, PeopleMapping, PersonInput, Role, SlackDirectoryView, SlackSyncRequest, SlackSyncResult } from '@dd/shared';
 
 export interface ActionResult {
   ok: boolean;
@@ -43,7 +43,7 @@ export async function retryAllFailed(): Promise<ActionResult> {
 export async function mapSlackUser(personId: number, slackUserId?: string): Promise<ActionResult> {
   return getBackend().mapSlackUser(await actor(), personId, slackUserId);
 }
-export async function savePolicy(p: { slaDays: number; reminderHours: number[]; directorAfterBreachHours: number }): Promise<ActionResult> {
+export async function savePolicy(p: { slaDays: number; reminderHours: number[]; escalationLevels: number; escalationStepHours: number }): Promise<ActionResult> {
   return getBackend().savePolicy(await actor(), p);
 }
 
@@ -95,6 +95,13 @@ export async function createPerson(input: PersonInput): Promise<ActionResult> {
 export async function updatePerson(id: number, input: PersonInput): Promise<ActionResult> {
   return getBackend().updatePerson(await actor(), id, input);
 }
-export async function syncSlack(dryRun: boolean, createMissing: boolean): Promise<ActionResult & { data?: SlackSyncResult }> {
-  return getBackend().syncSlack(await actor(), dryRun, createMissing) as Promise<ActionResult & { data?: SlackSyncResult }>;
+export async function readSlackDirectory(): Promise<ActionResult & { data?: SlackDirectoryView }> {
+  return getBackend().readSlackDirectory(await actor()) as Promise<ActionResult & { data?: SlackDirectoryView }>;
+}
+export async function syncSlack(req: SlackSyncRequest): Promise<ActionResult & { data?: SlackSyncResult }> {
+  return getBackend().syncSlack(await actor(), req) as Promise<ActionResult & { data?: SlackSyncResult }>;
+}
+
+export async function setSlackEnabled(enabled: boolean): Promise<ActionResult & { data?: { enabled: boolean; delivered: number; refreshed: number } }> {
+  return getBackend().setSlackEnabled(await actor(), enabled) as Promise<ActionResult & { data?: { enabled: boolean; delivered: number; refreshed: number } }>;
 }

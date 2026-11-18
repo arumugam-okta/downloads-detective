@@ -172,7 +172,10 @@ export class SupabaseStore implements Store {
   }
   async getPolicy(): Promise<Policy> {
     const r = await this.latestPolicyRow();
-    return r ? { ...DEFAULT_POLICY, ...(r.value as Partial<Policy>) } : { ...DEFAULT_POLICY };
+    if (!r) return { ...DEFAULT_POLICY };
+    // Policies saved before escalation levels existed carry one delay (manager -> director). That is now the step.
+    const { directorAfterBreachHours, ...saved } = r.value as Partial<Policy> & { directorAfterBreachHours?: number };
+    return { ...DEFAULT_POLICY, ...(directorAfterBreachHours && saved.escalationStepHours === undefined ? { escalationStepHours: directorAfterBreachHours } : {}), ...saved };
   }
   async setPolicy(p: Policy, changedBy: number | null) {
     const cur = await this.latestPolicyRow();

@@ -73,28 +73,80 @@ export const personRoles = (p: Pick<Person, 'isManager' | 'isCompliance'>, repor
   ...(p.isCompliance ? (['compliance'] as const) : []),
 ];
 
-/** What a Slack profile contributes to a person. Each value is null when the profile leaves it blank. */
+/** Person fields a Slack profile can feed. `manager` needs a "user" type Slack field; the rest take any text. */
+export const SLACK_TARGETS = [
+  { key: 'manager', label: 'Manager', hint: 'Builds the reporting hierarchy and escalation path', source: 'managerId' },
+  { key: 'title', label: 'Job title', hint: 'Only filled when empty, unless overwrite is on', source: 'title' },
+  { key: 'team', label: 'Team', hint: 'Only filled when empty, unless overwrite is on', source: 'department' },
+  { key: 'department', label: 'Department', hint: '', source: 'department' },
+  { key: 'division', label: 'Division', hint: '', source: 'division' },
+  { key: 'organization', label: 'Organization', hint: '', source: 'organization' },
+  { key: 'costCenter', label: 'Cost center', hint: '', source: 'costCenter' },
+  { key: 'employeeNumber', label: 'Employee ID', hint: '', source: 'employeeNumber' },
+  { key: 'employeeType', label: 'Employee type', hint: '', source: 'userType' },
+  { key: 'location', label: 'Location', hint: '', source: 'location' },
+  { key: 'timezone', label: 'Time zone', hint: '', source: 'tz' },
+] as const;
+
+export type SlackTarget = (typeof SLACK_TARGETS)[number]['key'];
+/** Person field -> key of the Slack profile field it is read from. */
+export type SlackMapping = Partial<Record<SlackTarget, string>>;
+
+/** A field a Slack profile can carry. `key` is unique; `name` is Slack's stable field_name (or the synthetic name). */
+export interface SlackFieldDef {
+  key: string;
+  name: string;
+  label: string;
+  type: string;
+}
+
+/** One person's Slack profile: every non-empty field value, keyed by SlackFieldDef.key. */
 export interface SlackProfile {
   slackUserId: string;
   email: string;
   name: string;
-  title: string | null;
-  department: string | null;
-  division: string | null;
-  organization: string | null;
-  costCenter: string | null;
-  employeeNumber: string | null;
-  employeeType: string | null;
-  location: string | null;
-  timezone: string | null;
-  /** The Slack user id in the Manager field. */
-  managerSlackId: string | null;
+  values: Record<string, string>;
+}
+
+/** The default mapping for a workspace: each target's usual source, when the workspace defines it. */
+export function suggestSlackMapping(fields: SlackFieldDef[]): SlackMapping {
+  const out: SlackMapping = {};
+  for (const t of SLACK_TARGETS) {
+    const hit = fields.find((f) => f.name === t.source);
+    if (hit) out[t.key] = hit.key;
+  }
+  return out;
+}
+
+export interface SlackDirectoryView {
+  /** Pass back to the sync so the server reuses this read instead of calling Slack again. */
+  snapshotId: string;
+  readAt: string;
+  fields: SlackFieldDef[];
+  suggested: SlackMapping;
+  people: SlackProfile[];
+  /** Profiles Slack would not return. They are left out. */
+  failed: number;
+}
+
+export interface SlackSyncRequest {
+  snapshotId: string;
+  mapping: SlackMapping;
+  /** Slack user ids the user ticked. */
+  selected: string[];
+  /** Also add each selected person's managers, up the chain, so every link resolves. */
+  withChain: boolean;
+  /** Replace a title or team that is already set. Off by default: those are only filled when empty. */
+  overwrite: boolean;
+  dryRun: boolean;
 }
 
 export interface SlackSyncRow {
   email: string;
   name: string;
   action: 'create' | 'update' | 'unchanged';
+  /** True when this person was added only because someone selected reports to them. */
+  viaChain: boolean;
   /** Field -> [before, after], only for fields that change. */
   changes: Record<string, [string | null, string | null]>;
   manager: string | null;
@@ -103,7 +155,8 @@ export interface SlackSyncRow {
 
 export interface SlackSyncResult {
   dryRun: boolean;
-  scanned: number;
+  selected: number;
+  chainAdded: number;
   created: number;
   updated: number;
   unchanged: number;
@@ -111,9 +164,9 @@ export interface SlackSyncResult {
   /** Manager set in Slack but the person has a manual manager, so it was left alone. */
   managersKeptManual: number;
   withoutManager: number;
+  /** Mapped fields that nobody in the selection has a value for, so nothing can be saved for them. */
+  emptyTargets: SlackTarget[];
   issues: PeopleIssue[];
   rows: SlackSyncRow[];
-  /** Fields the workspace's Slack profile does not define, so nothing can be synced for them. */
-  missingFields: string[];
   syncedAt: string;
 }

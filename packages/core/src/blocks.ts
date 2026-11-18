@@ -1,6 +1,6 @@
 // Slack Block Kit builders. Paste the `blocks` JSON into https://app.slack.com/block-kit-builder to preview.
 import type { Button, KnownBlock, ModalView } from '@slack/types';
-import { ATTESTATION_LABEL, ATTESTATION_KINDS, displayStatus, type Item, type ItemFile, type Person } from '@dd/shared';
+import { ATTESTATION_LABEL, ATTESTATION_KINDS, displayStatus, escalationRole, type Item, type ItemFile, type Person } from '@dd/shared';
 
 export interface SlackMessage {
   text: string;
@@ -177,21 +177,22 @@ export function manualReminderMessage(item: Item, fileCount: number, by: Person,
 export interface EscalationOptions {
   /** Local files on the item, for the sentence "so the 3 local files are deleted". */
   fileCount: number;
-  /** When the director is told if still unresolved. Only meaningful for the manager notice. */
-  directorAt?: string | null;
+  /** When the next level up is told if this is still unresolved. null at the last level. */
+  nextAt?: string | null;
   by?: Person | undefined;
 }
 
-/** Manager (or director) notice. Sent as a private DM; Slack gives it no colour, so the lead line carries the urgency. */
-export function escalationMessage(item: Item, engineer: Person, level: 'manager' | 'director', c: MessageContext, o: EscalationOptions): SlackMessage {
+/**
+ * Escalation notice. Level 1 is the direct manager, level 2 their manager, and so on. Slack gives a DM no colour, so
+ * the lead line carries the urgency.
+ */
+export function escalationMessage(item: Item, engineer: Person, level: number, c: MessageContext, o: EscalationOptions): SlackMessage {
   const text = `SLA missed: case #${item.caseNumber} (${engineer.name})`;
-  const foot = level === 'manager'
-    ? `Manager notified at SLA breach${o.directorAt ? ` \u00b7 Escalates to director ${utcAt(o.directorAt)} if unresolved.` : '.'}`
-    : 'Director notified after the manager escalation went unresolved.';
+  const foot = `${level === 1 ? 'Manager notified at SLA breach' : `Escalation level ${level}`}${o.nextAt ? ` \u00b7 Escalates to ${escalationRole(level + 1)} ${utcAt(o.nextAt)} if unresolved.` : ' \u00b7 Last escalation level.'}`;
   return {
     text,
     blocks: [
-      title(`:red_circle: ${level === 'manager' ? 'A cleanup item needs your follow-up.' : 'A cleanup item is still unresolved.'}`),
+      title(`:red_circle: ${level === 1 ? 'A cleanup item needs your follow-up.' : 'A cleanup item is still unresolved.'}`),
       section(
         `${esc(engineer.name)} has 1 overdue cleanup item from ${caseRef(item)}. Please follow up so the ${plural(o.fileCount, 'local file')} ${o.fileCount === 1 ? 'is' : 'are'} deleted or an approved exception is recorded.` +
           (o.by ? `\n_Escalated by ${esc(o.by.name)}._` : ''),
@@ -205,7 +206,7 @@ export function escalationMessage(item: Item, engineer: Person, level: 'manager'
         ],
       },
       context(foot),
-      context('Private message to the direct manager \u00b7 Case access follows the reporting hierarchy.'),
+      context(`Private message${level === 1 ? ' to the direct manager' : ''} \u00b7 Case access follows the reporting hierarchy.`),
     ],
   };
 }

@@ -43,11 +43,13 @@ export function managerChain(people: Person[], personId: number): Person[] {
   return chain;
 }
 
-/** Who gets told at breach (manager) and after the director delay (the manager's manager). */
-export function escalationTargets(people: Person[], engineerId: number): { manager: Person | null; director: Person | null } {
-  const chain = managerChain(people, engineerId);
-  return { manager: chain[0] ?? null, director: chain[1] ?? null };
+/** Who is told as an item stays overdue, nearest first: level 1 is the direct manager. Deactivated managers are skipped. */
+export function escalationChain(people: Person[], engineerId: number): Person[] {
+  return managerChain(people, engineerId).filter((p) => p.active);
 }
+
+/** "manager", "director", then "level 3 leader"... for audit text and copy. */
+export const escalationRole = (level: number): string => (level === 1 ? 'manager' : level === 2 ? 'director' : `level ${level} leader`);
 
 export type Role = 'engineer' | 'manager' | 'compliance';
 

@@ -1,5 +1,5 @@
 import { WebClient } from '@slack/web-api';
-import type { SlackProfile } from '@dd/shared';
+import type { SlackFieldDef, SlackProfile } from '@dd/shared';
 import type { SlackMessage } from './blocks.ts';
 
 export interface Delivered {
@@ -11,8 +11,8 @@ export interface SlackDirectory {
   profiles: SlackProfile[];
   /** People whose profile could not be read; the sync carries on without them. */
   failed: Array<{ slackUserId: string; error: string }>;
-  /** Profile fields this workspace does not define, so they cannot be synced. */
-  missingFields: string[];
+  /** Every field a profile can carry in this workspace, plus the built-in title, time zone and location. */
+  fields: SlackFieldDef[];
 }
 
 /** Everything the service needs from Slack. Swapped for ConsoleNotifier when no bot token is configured. */
@@ -58,14 +58,18 @@ export class SlackNotifier implements Notifier {
   }
 
   /**
-   * users.list has no custom profile fields, so this reads each profile (users.profile.get). Fields are found by
-   * their stable field_name via team.profile.get rather than hard-coded ids, so it works in any workspace.
+   * users.list has no custom profile fields, so this reads each profile (users.profile.get). Fields are described by
+   * team.profile.get, so whatever the workspace defines is available to map. Managers who sit outside the
+   * installed workspace are followed through users.info.
    */
   async listProfiles(): Promise<SlackDirectory> {
     const team = await this.client.team.profile.get({});
-    const defs = ((team.profile as { fields?: Field[] } | undefined)?.fields ?? []);
-    const idOf = new Map(defs.flatMap((f) => (f.field_name && f.id ? [[f.field_name, f.id] as const] : [])));
-    const missingFields = WANTED.filter((n) => !idOf.has(n));
+    const defs = ((team.profile as { fields?: Array<{ id?: string; field_name?: string; label?: string; type?: string }> } | undefined)?.fields ?? []);
+    const custom: SlackFieldDef[] = defs.filter((f) => f.id && f.type !== 'file').map((f) => ({ key: f.id!, name: f.field_name ?? f.id!, label: f.label ?? f.id!, type: f.type ?? 'text' }));
+    const fields = [...BUILT_IN, ...custom];
+    const keyOf = (name: string) => custom.find((f) => f.name === name)?.key;
+    const managerKey = keyOf('managerId');
+    const placeKeys = ['locality', 'region', 'country'].map(keyOf);
 
     const members: Member[] = [];
     for await (const page of this.client.paginate('users.list', { limit: 200 })) members.push(...(((page as { members?: Member[] }).members) ?? []));
@@ -77,26 +81,23 @@ export class SlackNotifier implements Notifier {
       try {
         const r = await this.client.users.profile.get({ user: m.id! });
         const f = ((r.profile as { fields?: Record<string, { value?: string }> } | undefined)?.fields ?? {});
-        const val = (name: string) => clean(f[idOf.get(name) ?? '']?.value);
-        return {
-          slackUserId: m.id!, email: m.profile!.email!.toLowerCase(), name: clean(m.real_name) ?? m.profile!.email!, title: clean(m.profile?.title),
-          department: val('department'), division: val('division'), organization: val('organization'), costCenter: val('costCenter'),
-          employeeNumber: val('employeeNumber'), employeeType: val('userType'),
-          location: ['locality', 'region', 'country'].map(val).filter(Boolean).join(', ') || null,
-          timezone: clean(m.tz), managerSlackId: val('managerId'),
-        };
+        const values: Record<string, string> = {};
+        for (const d of custom) { const v = clean(f[d.key]?.value); if (v) values[d.key] = v; }
+        const title = clean(m.profile?.title); if (title) values.title = title;
+        const tz = clean(m.tz); if (tz) values.tz = tz;
+        const place = placeKeys.map((k) => (k ? values[k] : undefined)).filter(Boolean).join(', '); if (place) values.location = place;
+        return { slackUserId: m.id!, email: m.profile!.email!.toLowerCase(), name: clean(m.real_name) ?? m.profile!.email!, values };
       } catch (e) {
         failed.push({ slackUserId: m.id!, error: slackErrorCode(e) ?? (e as Error).message });
         return null;
       }
     };
     const seen = new Set(people.map((m) => m.id!));
-    const push = (p: SlackProfile | null) => { if (p) profiles.push(p); };
-    await pool(people, 5, async (m) => push(await read(m)));
+    await pool(people, 5, async (m) => { const p = await read(m); if (p) profiles.push(p); });
 
-    // users.list only returns the workspace the bot is installed in. On an enterprise, managers often sit in another
-    // workspace, so follow each unresolved manager id (and their manager, and so on) with users.info.
-    let frontier = [...new Set(profiles.map((p) => p.managerSlackId).filter((id): id is string => !!id && !seen.has(id)))];
+    // On an enterprise, managers often sit in another workspace: follow each unresolved manager id upward.
+    const mgrIds = (ps: SlackProfile[]) => [...new Set(ps.map((p) => (managerKey ? p.values[managerKey] : undefined)).filter((id): id is string => !!id && !seen.has(id)))];
+    let frontier = mgrIds(profiles);
     for (let depth = 0; depth < 8 && frontier.length; depth++) {
       frontier.forEach((id) => seen.add(id));
       const found: SlackProfile[] = [];
@@ -111,17 +112,22 @@ export class SlackNotifier implements Notifier {
         }
       });
       profiles.push(...found);
-      frontier = [...new Set(found.map((p) => p.managerSlackId).filter((id): id is string => !!id && !seen.has(id)))];
+      frontier = mgrIds(found);
     }
-    return { profiles, failed, missingFields };
+    return { profiles, failed, fields };
   }
 }
 
-type Field = { id?: string; field_name?: string };
 type Member = { id?: string; deleted?: boolean; is_bot?: boolean; is_restricted?: boolean; is_ultra_restricted?: boolean; real_name?: string; tz?: string; profile?: { email?: string; title?: string } };
 
-const WANTED = ['managerId', 'department', 'division', 'organization', 'costCenter', 'employeeNumber', 'userType'] as const;
 const clean = (v: unknown): string | null => (typeof v === 'string' && v.trim() && v.trim() !== '-' ? v.trim() : null);
+
+/** Built in to every Slack profile, so always offered as a source. */
+const BUILT_IN: SlackFieldDef[] = [
+  { key: 'title', name: 'title', label: 'Title (Slack profile)', type: 'text' },
+  { key: 'tz', name: 'tz', label: 'Time zone (Slack account)', type: 'text' },
+  { key: 'location', name: 'location', label: 'Location (city, region, country)', type: 'text' },
+];
 
 /** Runs `fn` over `items` with at most `n` in flight. */
 async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>): Promise<void> {

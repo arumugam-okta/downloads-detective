@@ -27,7 +27,7 @@ export default async function UsersPage() {
   const teams = [...new Set(people.map((p) => p.team).filter((t): t is string => !!t))].sort();
   return (
     <>
-      <PageHeader title="Users" subtitle="Who receives cleanup items, who they report to, and what they can see." actions={<><SlackSync lastSyncedAt={people.map((p) => p.slackSyncedAt).filter((d): d is string => !!d).sort().at(-1) ?? null} /><PeopleImport /></>} />
+      <PageHeader title="Users" subtitle="Who receives cleanup items, who they report to, and what they can see." actions={<><SlackSync known={people.map((p) => ({ email: p.email, slackUserId: p.slackUserId }))} lastSyncedAt={people.map((p) => p.slackSyncedAt).filter((d): d is string => !!d).sort().at(-1) ?? null} /><PeopleImport /></>} />
       <div className="grid grid-cols-4 gap-4">
         <Kpi label="Active people" value={active.length} icon={Users} />
         <Kpi label="Managers" value={active.filter((r) => r.isManager || r.reports > 0).length} hint="Explicit or leading a team" icon={Network} />

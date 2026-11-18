@@ -1,6 +1,7 @@
 import { FileText, MessageSquare, Users } from 'lucide-react';
 import { PageHeader } from '@/components/dd/kpi';
 import { PolicyForm } from '@/components/dd/policy-form';
+import { SlackSwitch } from '@/components/dd/slack-switch';
 import { SlackTest } from '@/components/dd/slack-test';
 import { getSlackStatus } from '@/lib/actions';
 import { getSession, getStore, requireRole } from '@/lib/session';
@@ -19,6 +20,7 @@ export default async function Settings() {
   return (
     <>
       <PageHeader title="Settings" subtitle="Organization-wide policy and delivery controls." />
+      <SlackSwitch enabled={policy.slackEnabled} pausedAt={policy.slackPausedAt} held={s.world.items.filter((i) => i.state === 'open' && !i.slackChannel).length} connected={slack?.mode === 'live'} />
       <div className="grid grid-cols-[1fr_340px] gap-4">
         <section className="rounded-xl border bg-card p-6"><PolicyForm initial={policy} /></section>
         <section className="self-start rounded-xl border bg-card p-6">
@@ -28,7 +30,7 @@ export default async function Settings() {
             <li className="flex gap-3"><MessageSquare className="mt-0.5 size-5 text-primary" aria-hidden /><div><div className="text-sm font-semibold">Slack workspace</div><div className="text-xs text-muted-foreground">{slackDetail}</div><div className={`mt-1 text-xs font-medium ${tone}`}>{toneLabel}</div></div></li>
             <li className="flex gap-3"><Users className="mt-0.5 size-5 text-primary" aria-hidden /><div><div className="text-sm font-semibold">Organization directory</div><div className="text-xs text-muted-foreground">HR sync · Daily at 05:30 UTC</div><div className="mt-1 text-xs font-medium text-st-closed">Connected</div></div></li>
           </ul>
-          <SlackTest defaultEmail={s.viewer.person.email} mode={mode} />
+          <SlackTest defaultEmail={s.viewer.person.email} mode={mode} disabled={!policy.slackEnabled} />
         </section>
       </div>
       <section className="rounded-xl border bg-card p-6">

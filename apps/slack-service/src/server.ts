@@ -76,11 +76,16 @@ export async function buildServer(l: Lifecycle, cfg: ServiceConfig): Promise<Fas
     const b = z.object({ csv: z.string().min(1), mapping: z.record(z.string(), z.string()), dryRun: z.boolean(), filename: z.string().optional() }).parse(req.body);
     return l.importPeople(await actorOf(req), b.csv, b.mapping, { dryRun: b.dryRun, ...(b.filename ? { filename: b.filename } : {}) });
   });
+  app.get('/people/slack-directory', async (req) => l.readSlackDirectory(await actorOf(req)));
   app.post('/people/slack-sync', async (req) => {
-    const b = z.object({ dryRun: z.boolean(), createMissing: z.boolean().default(true) }).parse(req.body ?? {});
+    const b = z.object({
+      snapshotId: z.string().min(1), mapping: z.record(z.string(), z.string()), selected: z.array(z.string()).max(5000),
+      withChain: z.boolean(), overwrite: z.boolean(), dryRun: z.boolean(),
+    }).parse(req.body ?? {});
     return l.syncFromSlack(await actorOf(req), b);
   });
   app.put('/policy', async (req) => l.updatePolicy(await actorOf(req), req.body));
+  app.put('/slack/enabled', async (req) => l.setSlackEnabled(await actorOf(req), z.object({ enabled: z.boolean() }).parse(req.body ?? {}).enabled));
   app.get('/slack/status', async (req) => slackStatus(l, await actorOf(req), cfg));
   app.post('/slack/test', async (req) => {
     const actor = await actorOf(req);

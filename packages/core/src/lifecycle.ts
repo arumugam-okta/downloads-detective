@@ -1,6 +1,6 @@
 import {
-  ATTESTATION_LABEL, SYSTEM_ACTOR, attestationInput, dueAtFor, escalationTargets,
-  SLACK_ID_RE, type AttestationInput, type Item, type PeopleCsvInspection, type PeopleImportResult, type PeopleMapping, type Person, type PersonInput, type Policy, type SlackSyncResult,
+  ATTESTATION_LABEL, SYSTEM_ACTOR, attestationInput, dueAtFor, escalationChain, escalationDueAt, MAX_ESCALATION_LEVELS,
+  SLACK_ID_RE, type AttestationInput, type Item, type PeopleCsvInspection, type PeopleImportResult, type PeopleMapping, type Person, type PersonInput, type Policy, type SlackDirectoryView, type SlackSyncRequest, type SlackSyncResult, suggestSlackMapping,
 } from '@dd/shared';
 import { fingerprintOf, type NewAudit, type Store } from '@dd/db';
 import {
@@ -33,9 +33,12 @@ export interface ReportSummary {
   itemsUpdated: number;
   needsTriage: number;
   failed: number;
+  /** Items created while Slack is paused. They are delivered when it is switched back on. */
+  held: number;
 }
 
-export type DeliveryResult = 'delivered' | 'triage' | 'failed';
+/** 'paused' means Slack messaging is switched off, so the item is held until it is switched back on. */
+export type DeliveryResult = 'delivered' | 'triage' | 'failed' | 'paused';
 
 const SYSTEM = { actorId: null, actorLabel: SYSTEM_ACTOR } as const;
 const person = (p: Person) => ({ actorId: p.id, actorLabel: p.name });
@@ -44,6 +47,20 @@ export class Lifecycle {
   constructor(readonly deps: LifecycleDeps) {}
 
   get store() { return this.deps.store; }
+
+  private policyCache: { at: number; policy: Policy } | null = null;
+  /** Policy with a few seconds of cache, because every outbound message checks it. Saving a policy clears it. */
+  async policy(): Promise<Policy> {
+    if (this.policyCache && Date.now() - this.policyCache.at < 5_000) return this.policyCache.policy;
+    const policy = await this.store.getPolicy();
+    this.policyCache = { at: Date.now(), policy };
+    return policy;
+  }
+  async slackEnabled(): Promise<boolean> { return (await this.policy()).slackEnabled; }
+  /** For actions whose whole point is sending a message: say so rather than silently doing nothing. */
+  async requireSlack(): Promise<void> {
+    if (!(await this.slackEnabled())) throw new HttpError(409, 'Slack messaging is paused. Turn it back on in Settings to send messages.');
+  }
   now(): Date { return this.deps.clock?.() ?? new Date(); }
   ctx(): MessageContext { return { webUrl: this.deps.webUrl, now: this.now() }; }
 
@@ -69,7 +86,7 @@ export class Lifecycle {
 
   async refreshMessage(itemId: number): Promise<void> {
     const item = await this.mustItem(itemId);
-    if (!item.slackChannel || !item.slackTs) return;
+    if (!item.slackChannel || !item.slackTs || !(await this.slackEnabled())) return;
     const [files, engineer] = await Promise.all([this.store.listFiles([itemId]), this.mustPerson(item.engineerId)]);
     await this.quiet('update message', () =>
       this.deps.notifier.update({ channel: item.slackChannel!, ts: item.slackTs! }, itemMessage(item, files, engineer, this.ctx())));
@@ -77,12 +94,13 @@ export class Lifecycle {
 
   /** A fresh DM to the item's engineer (not a thread reply, so Slack notifies them). */
   private async nudge(item: Item, msg: SlackMessage): Promise<void> {
-    if (!item.slackChannel) return;
+    if (!item.slackChannel || !(await this.slackEnabled())) return;
     await this.quiet('direct message', () => this.deps.notifier.sendInDm(item.slackChannel!, msg));
   }
 
   /** DM anyone by Person, caching the Slack id. Returns false when they have no Slack account. */
   async dmPerson(p: Person, msg: SlackMessage): Promise<boolean> {
+    if (!(await this.slackEnabled())) return false;
     let id = p.slackUserId;
     if (!id) {
       id = await this.deps.notifier.lookupUserByEmail(p.email);
@@ -145,8 +163,8 @@ export class Lifecycle {
       } else if (item.state === 'closed') {
         // New downloads after a confirmed cleanup start a fresh SLA window.
         item = await store.updateItem(item.id, {
-          state: 'open', dueAt: dueAtFor(receivedAt, policy).toISOString(), acknowledgedAt: null, remindersSent: [], breachNotifiedAt: null,
-          directorNotifiedAt: null, attestationKind: null, attestationNotes: null, attestedAt: null, reviewedBy: null, reviewedAt: null,
+          state: 'open', dueAt: dueAtFor(receivedAt, policy).toISOString(), acknowledgedAt: null, remindersSent: [], escalationsSent: [], escalatedAt: null,
+          attestationKind: null, attestationNotes: null, attestedAt: null, reviewedBy: null, reviewedAt: null,
         });
         reopened.push(item.id);
         await this.audit({ ...SYSTEM, itemId: item.id, importId: imp.id, action: 'reopened', detail: 'Reopened: new downloads reported for a closed case' });
@@ -158,11 +176,13 @@ export class Lifecycle {
     }
 
     let needsTriage = 0;
+    let held = 0;
     let failed = invalid.length;
     for (const id of created) {
       const result = await this.deliver(id, imp.id);
       if (result === 'triage') needsTriage++;
       if (result === 'failed') failed++;
+      if (result === 'paused') held++;
     }
     for (const a of appended) {
       await this.quiet(`append files to ${a.itemId}`, async () => {
@@ -180,7 +200,7 @@ export class Lifecycle {
     await this.audit({ ...SYSTEM, importId: imp.id, action: 'report_ingested', detail: `Ingested ${rows.length + invalid.length} report rows` });
     return {
       importId: imp.id, rowsTotal: rows.length + invalid.length, duplicateRows, invalidRows: invalid.length,
-      itemsCreated: created.length, itemsUpdated: appended.length, needsTriage, failed,
+      itemsCreated: created.length, itemsUpdated: appended.length, needsTriage, failed, held,
     };
   }
 
@@ -189,6 +209,8 @@ export class Lifecycle {
   /** Sends (or re-sends) the engineer's Slack message. Never throws: failure becomes item state. */
   async deliver(itemId: number, importId?: number): Promise<DeliveryResult> {
     const { store, deps } = this;
+    // Held, not failed: the item stays open without a Slack message and is delivered when messaging resumes.
+    if (!(await this.slackEnabled())) return 'paused';
     let item = await this.mustItem(itemId);
     const engineer = await this.mustPerson(item.engineerId);
     const unresolved = async () => (await store.listIssues({ unresolvedOnly: true })).filter((i) => i.itemId === itemId);
@@ -263,6 +285,7 @@ export class Lifecycle {
   // ---------------------------------------------------------- manager actions
 
   async remind(itemId: number, by: Person): Promise<Item> {
+    await this.requireSlack();
     const item = await this.mustItem(itemId);
     requireManagerOf(by, item.engineerId, await this.store.listPeople());
     if (item.state === 'closed') throw new HttpError(409, 'This item is already closed');
@@ -274,25 +297,31 @@ export class Lifecycle {
   }
 
   async escalate(itemId: number, by: Person): Promise<Item> {
+    await this.requireSlack();
     const item = await this.mustItem(itemId);
     const people = await this.store.listPeople();
     requireManagerOf(by, item.engineerId, people);
     if (item.state === 'closed') throw new HttpError(409, 'This item is already closed');
     const engineer = await this.mustPerson(item.engineerId);
-    const { manager, director } = escalationTargets(people, engineer.id);
-    // A manager escalating goes up to their director; compliance goes to the manager.
-    const level = manager && by.id === manager.id ? 'director' : 'manager';
-    const target = level === 'director' ? director : manager;
+    const chain = escalationChain(people, engineer.id);
+    // A manager escalating goes one step above themselves; compliance goes to the next level not yet told.
+    const own = chain.findIndex((m) => m.id === by.id);
+    const level = own >= 0 ? own + 2 : Math.max(0, ...item.escalationsSent) + 1;
+    const target = chain[level - 1];
+    if (!target) {
+      throw new HttpError(409, own >= 0 ? 'There is no one above you in the reporting line' : item.escalationsSent.length
+        ? 'This item has already been escalated to everyone in the reporting line' : `No manager is on record for ${engineer.name}`);
+    }
+    const policy = await this.policy();
     const fileCount = (await this.store.listFiles([itemId])).length;
-    const policy = await this.store.getPolicy();
-    const directorAt = new Date(new Date(item.dueAt).getTime() + policy.directorAfterBreachHours * 3_600_000).toISOString();
-    const msg = escalationMessage(item, engineer, level, this.ctx(), { fileCount, directorAt, by });
-    const told: string[] = [];
-    if (target && (await this.dmPerson(target, msg))) told.push(target.name);
-    const now = this.now().toISOString();
-    const updated = await this.store.updateItem(itemId, level === 'director' ? { directorNotifiedAt: now } : { breachNotifiedAt: item.breachNotifiedAt ?? now });
-    if (!told.length) throw new HttpError(409, target ? `${target.name} has no Slack account, so nobody could be notified. Map their Slack user on the Ingestion page first.` : `No ${level} is on record for ${engineer.name}`);
-    await this.audit({ ...person(by), itemId, action: 'escalated', detail: `Escalated to ${told.join(', ')}` });
+    const nextAt = level < policy.escalationLevels && chain[level] ? escalationDueAt(new Date(item.dueAt), level + 1, policy).toISOString() : null;
+    if (!(await this.dmPerson(target, escalationMessage(item, engineer, level, this.ctx(), { fileCount, nextAt, by })))) {
+      throw new HttpError(409, `${target.name} has no Slack account, so nobody could be notified. Map their Slack user on the Ingestion page first.`);
+    }
+    // Everything up to this level counts as told, so the scheduled escalation does not repeat it.
+    const sent = [...new Set([...item.escalationsSent, ...Array.from({ length: level }, (_, i) => i + 1)])].sort((a, b) => a - b);
+    const updated = await this.store.updateItem(itemId, { escalationsSent: sent, escalatedAt: this.now().toISOString() });
+    await this.audit({ ...person(by), itemId, action: 'escalated', detail: `Escalated to ${target.name}` });
     return updated;
   }
 
@@ -308,7 +337,7 @@ export class Lifecycle {
 
     const old = item.slackChannel && item.slackTs ? { channel: item.slackChannel, ts: item.slackTs } : null;
     await this.store.updateItem(itemId, { engineerId: to.id, state: 'open', error: null, acknowledgedAt: null, slackChannel: null, slackTs: null });
-    if (old) await this.quiet('reassigned notice', () => this.deps.notifier.update(old, reassignedNotice(item, to)));
+    if (old && (await this.slackEnabled())) await this.quiet('reassigned notice', () => this.deps.notifier.update(old, reassignedNotice(item, to)));
     await this.audit({ ...person(by), itemId, action: 'reassigned', detail: `Reassigned from ${from.name} to ${to.name}` });
     await this.deliver(itemId);
     return this.mustItem(itemId);
@@ -344,6 +373,7 @@ export class Lifecycle {
     requireCompliance(by);
     const item = await this.mustItem(itemId);
     if (item.state !== 'triage' && item.state !== 'failed') throw new HttpError(409, 'Only items that were not delivered can be retried');
+    await this.requireSlack();
     const result = await this.deliver(itemId);
     await this.audit({ ...person(by), itemId, action: 'delivery_retried', detail: `Retried delivery: ${result}` });
     return result;
@@ -351,6 +381,7 @@ export class Lifecycle {
 
   async retryAllFailed(by: Person): Promise<{ retried: number; delivered: number }> {
     requireCompliance(by);
+    await this.requireSlack();
     const failed = await this.store.listItems({ states: ['failed'] });
     let delivered = 0;
     for (const item of failed) if ((await this.deliver(item.id)) === 'delivered') delivered++;
@@ -435,19 +466,40 @@ export class Lifecycle {
   }
 
   /**
-   * Pulls people, managers and profile fields (department, cost center, ...) from Slack. With dryRun it only reports.
-   * Manager links set by hand or CSV are kept; only links that came from Slack are refreshed.
+   * Reads every person's Slack profile once and keeps the result for a few minutes, so the picker, the preview and
+   * the final apply all work from the same data without hitting Slack's rate limits three times.
    */
-  async syncFromSlack(by: Person, opts: { dryRun: boolean; createMissing: boolean }): Promise<SlackSyncResult> {
+  async readSlackDirectory(by: Person): Promise<SlackDirectoryView> {
     requireCompliance(by);
     const dir = await this.deps.notifier.listProfiles();
     if (!dir) throw new HttpError(409, 'Slack is not connected. Set SLACK_BOT_TOKEN and restart.');
-    const plan = planSlackSync(dir.profiles, await this.store.listPeople(), { createMissing: opts.createMissing });
+    const snapshotId = crypto.randomUUID();
+    const readAt = this.now().toISOString();
+    this.snapshots.set(snapshotId, { dir, readAt, by: by.id });
+    for (const [id, s] of this.snapshots) if (this.now().getTime() - new Date(s.readAt).getTime() > 15 * 60_000) this.snapshots.delete(id);
+    return { snapshotId, readAt, fields: dir.fields, suggested: suggestSlackMapping(dir.fields), people: dir.profiles, failed: dir.failed.length };
+  }
+
+  private snapshots = new Map<string, { dir: NonNullable<Awaited<ReturnType<Lifecycle['deps']['notifier']['listProfiles']>>>; readAt: string; by: number }>();
+
+  /**
+   * Imports the people the user ticked, using the mapping they chose. With dryRun it only reports. Manager links set by
+   * hand or CSV are kept; only links that came from Slack are refreshed.
+   */
+  async syncFromSlack(by: Person, req: SlackSyncRequest): Promise<SlackSyncResult> {
+    requireCompliance(by);
+    const snap = this.snapshots.get(req.snapshotId);
+    if (!snap || snap.by !== by.id) throw new HttpError(409, 'That Slack read has expired. Reload the people list and try again.');
+    if (!req.selected.length) throw new HttpError(400, 'Select at least one person');
+    const known = new Set(snap.dir.fields.map((f) => f.key));
+    for (const [t, k] of Object.entries(req.mapping)) if (k && !known.has(k)) throw new HttpError(400, `Unknown Slack field for ${t}`);
+
+    const plan = planSlackSync(snap.dir.profiles, await this.store.listPeople(), { mapping: req.mapping, selected: new Set(req.selected), withChain: req.withChain, overwrite: req.overwrite });
     const { planned, links, ...summary } = plan;
-    const issues = [...plan.issues, ...dir.failed.map((f) => ({ rowNo: 0, email: f.slackUserId, level: 'warning' as const, message: `Profile could not be read: ${f.error}` }))];
+    const issues = [...plan.issues, ...snap.dir.failed.map((f) => ({ rowNo: 0, email: f.slackUserId, level: 'warning' as const, message: `Profile could not be read: ${f.error}` }))];
     const syncedAt = this.now().toISOString();
-    const result: SlackSyncResult = { ...summary, issues, missingFields: dir.missingFields, dryRun: opts.dryRun, syncedAt };
-    if (opts.dryRun) return result;
+    const result: SlackSyncResult = { ...summary, issues, dryRun: req.dryRun, syncedAt };
+    if (req.dryRun) return result;
 
     for (const p of planned) {
       if (!p.existing) await this.store.upsertPersonByEmail({ ...p.create, slackSyncedAt: syncedAt });
@@ -459,7 +511,7 @@ export class Lifecycle {
       const id = idOf.get(email), mid = idOf.get(mgr);
       if (id && mid) await this.store.updatePerson(id, { managerId: mid, managerSource: 'slack', slackSyncedAt: syncedAt });
     }
-    await this.audit({ ...person(by), action: 'slack_synced', detail: `Slack sync: ${plan.created} added, ${plan.updated} updated, ${plan.managersLinked} manager links (${plan.scanned} profiles)` });
+    await this.audit({ ...person(by), action: 'slack_synced', detail: `Slack import: ${plan.created} added, ${plan.updated} updated, ${plan.managersLinked} manager links (${plan.selected} selected${plan.chainAdded ? `, ${plan.chainAdded} managers added` : ''})` });
     return result;
   }
 
@@ -488,15 +540,47 @@ export class Lifecycle {
     requireCompliance(by);
     const parsed = policyInput.safeParse(raw);
     if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join('; '));
-    const p = parsed.data;
+    // Only the fields on the form: the Slack switch has its own control and must survive a save of the form.
+    const p: Policy = { ...(await this.store.getPolicy()), ...parsed.data };
     await this.store.setPolicy(p, by.id);
-    await this.audit({ actorId: by.id, actorLabel: by.name, action: 'policy_changed', detail: `SLA ${p.slaDays} days; reminders at ${p.reminderHours.join('h, ') || 'none'}${p.reminderHours.length ? 'h' : ''}` });
+    this.policyCache = null;
+    const route = p.escalationLevels === 0 ? 'no escalation' : `${p.escalationLevels} escalation level${p.escalationLevels === 1 ? '' : 's'}, ${p.escalationStepHours}h apart`;
+    await this.audit({ actorId: by.id, actorLabel: by.name, action: 'policy_changed', detail: `SLA ${p.slaDays} days; reminders at ${p.reminderHours.join('h, ') || 'none'}${p.reminderHours.length ? 'h' : ''}; ${route}` });
     return p;
+  }
+
+  /**
+   * The master switch for everything sent to Slack. Takes effect immediately, so it is its own action rather than a
+   * field on the policy form. Turning it back on delivers what was held and refreshes messages that went stale.
+   */
+  async setSlackEnabled(by: Person, enabled: boolean): Promise<{ enabled: boolean; delivered: number; refreshed: number }> {
+    requireCompliance(by);
+    const cur = await this.store.getPolicy();
+    if (cur.slackEnabled === enabled) return { enabled, delivered: 0, refreshed: 0 };
+    const now = this.now().toISOString();
+    await this.store.setPolicy(enabled ? { ...cur, slackEnabled: true, slackResumedAt: now, slackPausedAt: null } : { ...cur, slackEnabled: false, slackPausedAt: now }, by.id);
+    this.policyCache = null;
+    await this.audit({ ...person(by), action: enabled ? 'slack_resumed' : 'slack_paused', detail: enabled ? 'Turned Slack messaging on' : 'Turned Slack messaging off' });
+    if (!enabled) return { enabled, delivered: 0, refreshed: 0 };
+
+    // Deliver what was held, then bring messages up to date for anything done on the web while it was off.
+    let delivered = 0;
+    for (const item of await this.store.listItems({ states: ['open'] })) if (!item.slackChannel && (await this.deliver(item.id)) === 'delivered') delivered++;
+    const since = cur.slackPausedAt;
+    let refreshed = 0;
+    if (since) {
+      for (const item of await this.store.listItems()) {
+        if (!item.slackChannel || !item.slackTs) continue;
+        if ((item.attestedAt && item.attestedAt >= since) || (item.acknowledgedAt && item.acknowledgedAt >= since)) { await this.refreshMessage(item.id); refreshed++; }
+      }
+    }
+    return { enabled, delivered, refreshed };
   }
 }
 
 const policyInput = z.object({
   slaDays: z.number().int().min(1).max(30),
   reminderHours: z.array(z.number().int().min(1)).max(5),
-  directorAfterBreachHours: z.number().int().min(1).max(168),
+  escalationLevels: z.number().int().min(0).max(MAX_ESCALATION_LEVELS),
+  escalationStepHours: z.number().int().min(1).max(168),
 });
